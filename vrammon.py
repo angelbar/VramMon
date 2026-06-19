@@ -25,16 +25,14 @@ DEFAULT = {
     'h': 90,
     'x': None,
     'y': None,
+    'color_modelo':   '#FF00FF',
+    'color_contexto': '#00FFFF',
+    'color_sistema':  '#FFFF00',
+    'color_libre':    '#00FF00',
 }
 
-# Colores de las barras (mismos que vrammon.ps1)
-BAR_COLORS = {
-    'Modelo':   '#FF00FF',  # Magenta
-    'Contexto': '#00FFFF',  # Cyan
-    'Sistema':  '#FFFF00',  # Yellow
-    'Libre':    '#00FF00',  # Green
-}
-BAR_ORDER = ['Modelo', 'Contexto', 'Sistema', 'Libre']
+COLOR_KEYS = ['color_modelo', 'color_contexto', 'color_sistema', 'color_libre']
+LABELS = ['Modelo', 'Contexto', 'Sistema', 'Libre']
 
 
 def load_config():
@@ -47,8 +45,9 @@ def load_config():
 
 def save_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
+    keys = ('bg', 'fg', 'w', 'h', 'x', 'y') + tuple(COLOR_KEYS)
     with open(CONFIG_FILE, 'w') as f:
-        json.dump({k: c[k] for k in ('bg', 'fg', 'w', 'h', 'x', 'y')}, f)
+        json.dump({k: c[k] for k in keys}, f)
 
 
 c = load_config()
@@ -104,8 +103,9 @@ def reset_config():
     canvas.configure(bg=DEFAULT['bg'])
     bottom_bar.configure(bg=DEFAULT['bg'])
     resizer.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
-    for lbl, _ in LEGEND_ITEMS:
-        legend_labels[lbl].configure(bg=DEFAULT['bg'], fg=BAR_COLORS.get(lbl, DEFAULT['fg']))
+    for lbl, ckey in zip(LABELS, COLOR_KEYS):
+        legend_labels[lbl].configure(bg=DEFAULT['bg'], fg=DEFAULT[ckey])
+        legend_squares[lbl].configure(bg=DEFAULT[ckey])
     # Resetear colores de botones
     for btn in (btn_close, btn_reset, btn_palette):
         btn.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
@@ -129,19 +129,15 @@ canvas.pack(expand=False, fill="x")
 legend_frame = tk.Frame(canvas_frame, bg=c['bg'])
 legend_frame.pack(fill="x", pady=(3, 0))
 
-LEGEND_ITEMS = [
-    ('Modelo',   '#FF00FF'),
-    ('Contexto', '#00FFFF'),
-    ('Sistema',  '#FFFF00'),
-    ('Libre',    '#00FF00'),
-]
+legend_squares = {}
 legend_labels = {}
-for lbl, color in LEGEND_ITEMS:
-    sq = tk.Frame(legend_frame, bg=color, width=8, height=8, bd=0, highlightthickness=0)
+for lbl, ckey in zip(LABELS, COLOR_KEYS):
+    sq = tk.Frame(legend_frame, bg=c[ckey], width=8, height=8, bd=0, highlightthickness=0)
     sq.pack(side="left", padx=(0, 2))
     sq.pack_propagate(False)
+    legend_squares[lbl] = sq
     lb = tk.Label(legend_frame, text=lbl, font=("Segoe UI", 8),
-                  bg=c['bg'], fg=color)
+                  bg=c['bg'], fg=c[ckey])
     lb.pack(side="left", padx=(0, 8))
     legend_labels[lbl] = lb
 
@@ -217,12 +213,7 @@ def draw_bars(data):
         return
 
     total = data['total']
-    items = [
-        (data['modelo'],   '#FF00FF'),  # Modelo
-        (data['contexto'], '#00FFFF'),  # Contexto
-        (data['sistema'],  '#FFFF00'),  # Sistema
-        (data['libre'],    '#00FF00'),  # Libre
-    ]
+    vals = [data['modelo'], data['contexto'], data['sistema'], data['libre']]
 
     # Fondo oscuro de la barra
     radius = 4
@@ -239,15 +230,13 @@ def draw_bars(data):
 
     # Segmentos apilados con borde entre colores
     x_offset = bar_x
-    colors = ['#FF00FF', '#00FFFF', '#FFFF00', '#00FF00']
-    vals = [data['modelo'], data['contexto'], data['sistema'], data['libre']]
-    for i, (val, color) in enumerate(zip(vals, colors)):
+    for i, val in enumerate(vals):
         if val <= 0:
             continue
         seg_w = max(2, int(bar_w * (val / total)))
         canvas.create_rectangle(
             x_offset, bar_y, x_offset + seg_w, bar_y + bar_h,
-            fill=color, outline='#111111', width=1, tags='seg'
+            fill=c[COLOR_KEYS[i]], outline='#111111', width=1, tags='seg'
         )
         x_offset += seg_w
 
@@ -330,7 +319,7 @@ def pick_colors():
         canvas_frame.configure(bg=c['bg'])
         legend_frame.configure(bg=c['bg'])
         canvas.configure(bg=c['bg'])
-        for lbl, _ in LEGEND_ITEMS:
+        for lbl in LABELS:
             legend_labels[lbl].configure(bg=c['bg'])
         bottom_bar.configure(bg=c['bg'])
         if _last_data:
@@ -340,7 +329,15 @@ def pick_colors():
         c['fg'] = col2[1]
         if _last_data:
             draw_bars(_last_data)
+    for lbl, ckey in zip(LABELS, COLOR_KEYS):
+        col3 = cc.askcolor(title=f"Color — {lbl}", color=c[ckey], parent=root)
+        if col3 and col3[1]:
+            c[ckey] = col3[1]
+            legend_squares[lbl].configure(bg=c[ckey])
+            legend_labels[lbl].configure(fg=c[ckey])
     save_config()
+    if _last_data:
+        draw_bars(_last_data)
 
 
 def on_palette_enter(e):
