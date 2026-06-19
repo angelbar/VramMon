@@ -1,56 +1,64 @@
-# VramMon — Monitor de VRAM Desktop
+# VramMon — Monitor de VRAM para NVIDIA
 
-## Problem Statement
+## Visión
 
-El script `vrammon.ps1` original muestra el uso de VRAM de NVIDIA en consola con barras coloreadas, pero requiere PowerShell y es incómodo de tener siempre visible. Se necesita una versión desktop persistente, arrastrable y personalizable.
+Widget de escritorio flotante que muestra el uso de VRAM de GPUs NVIDIA en una barra apilada a color. Ocupa espacio mínimo, siempre al frente, actualización cada 5 segundos.
 
-## Solution
+## Stack técnico
 
-Un monitor de VRAM en ventana flotante (sin bordes) que muestra 4 barras coloreadas con el uso de VRAM categorizado, actualizándose cada 5 segundos. Misma filosofía que Clock: minimalista, arrastrable, redimensionable, con persistencia de configuración.
+| Capa | Tecnología |
+|------|-----------|
+| Lenguaje | Go 1.26 |
+| GUI | Windows API nativa via [lxn/walk](https://github.com/lxn/walk) |
+| Dibujo | GDI+ (canvas de walk) |
+| Compilación | `go build -ldflags="-H windowsgui"` |
+| Binario | Único, ~8 MB, **sin empaquetador**, sin runtime externo |
+| Persistencia | `%APPDATA%/VramMon/config.json` (JSON) |
+| Distribución | GitHub + Gitea |
 
-## User Stories
+## Historias de usuario
 
-1. Como usuario, quiero ver el uso de VRAM en tiempo real con barras visuales, para monitorear mi GPU sin abrir terminal.
-2. Como usuario, quiero las mismas 4 categorías que el script original: **Modelo** (magenta), **Contexto** (cyan), **Sistema** (yellow), **Libre** (green).
-3. Como usuario, quiero que la ventana se pueda arrastrar, redimensionar y cerrar con Escape, igual que Clock.
-4. Como usuario, quiero un menú hover con botones `✕` (cerrar), `↺` (reset), `🎨` (selector de colores).
-5. Como usuario, quiero que la configuración (posición, tamaño, colores) persista entre sesiones.
-6. Como usuario, quiero arrastrar la ventana desde cualquier parte del área principal.
+1. **Como usuario NVIDIA**, quiero ver en tiempo real cuánta VRAM está usando mi modelo de IA, el contexto, el sistema y cuánta queda libre, en una sola barra apilada a color.
+2. **Como usuario que personaliza**, quiero cambiar el color de fondo, texto y cada segmento de la barra desde un selector de color nativo de Windows.
+3. **Como usuario que minimiza espacio**, quiero reducir la ventana hasta ~30px de alto y que se pueda arrastrar a cualquier lugar de la pantalla.
+4. **Como usuario que distribuye**, quiero un solo `.exe` que funcione sin dependencias y no active falsos positivos de antivirus.
 
-## Implementation Decisions
+## Funcionalidades
 
-- **Lenguaje:** Python con tkinter (mismo stack que Clock).
-- **Compilación:** PyInstaller `--onefile --noconsole`.
-- **Persistencia:** `%APPDATA%/VramMon/config.json` (bg, fg, w, h, x, y).
-- **Datos VRAM:** `nvidia-smi` vía `subprocess`. Misma lógica que el PS1 original: filtra procesos IA (python, llama, ollama, etc.) y aplica heurística de 850MB de overhead.
-- **Visualización:** `tkinter.Canvas` con rectángulos proporcionales para cada categoría. Colores fijos por categoría (Magenta, Cyan, Yellow, Green) que no cambian con el selector de colores (solo cambian bg y fg generales).
-- **Actualización:** Cada 5 segundos vía `root.after(5000, ...)`.
+- Barra única apilada con 4 segmentos: Modelo (magenta), Contexto (cyan), Sistema (amarillo), Libre (verde)
+- Texto centrado: `3248 / 8192 MB (39%)`
+- Leyenda con cuadros de color debajo de la barra
+- Ventana **sin bordes** (frameless), arrastrable desde la barra
+- Redimensionable desde la esquina inferior derecha (◢)
+- Botones hover (✕ ↺ 🎨) al pasar el mouse por la zona superior
+- Selector de color nativo de Windows para fondo, texto y los 4 segmentos
+- Botón ↺ para restaurar colores por defecto
+- Actualización automática cada 5 segundos
+- Persistencia de posición, tamaño y colores en `config.json`
+- Sin terminal/consola fantasma (hidden window en `nvidia-smi`)
 
-## Colores de Barras (fijos, del PS1 original)
+## Heurística de VRAM
 
-| Categoría | Color | Hex |
-|---|---|---|
-| Modelo | Magenta | `#FF00FF` |
-| Contexto | Cyan | `#00FFFF` |
-| Sistema | Yellow | `#FFFF00` |
-| Libre | Green | `#00FF00` |
+- Overhead base del driver: **850 MB**
+- Contexto estimado: **15%** de la memoria del modelo
+- Los procesos se clasifican como "modelo" si contienen: `python`, `llama`, `ollama`, `studio`, `cuda`, `ai`, `tensor`, `vllm`, `text-generation`, `lmstudio`
 
-## Out of Scope
+## Tamaños
 
-- Soporte para GPUs que no sean NVIDIA.
-- Múltiples GPUs.
-- Gráficos históricos o tendencias.
-- Alertas por umbral de VRAM.
-- Modo 12h/24h.
+| Estado | Alto mínimo | Ancho mínimo |
+|--------|------------|-------------|
+| Normal | 90 px | 400 px |
+| Colapsado | ~30 px | 320 px |
 
-## Estructura del proyecto
+## Distribución
 
-```
-Desa/VramMon/
-  vrammon.py      # Script principal
-  vrammon.ps1     # Script PowerShell original (preservado)
-  PRD.md          # Este documento
-  dist/VramMon.exe  # Ejecutable compilado
-```
+- Código fuente: público en GitHub
+- Binario compilado: GitHub Releases
+- Sin firma digital (no requiere certificado EV para uso normal)
+- No requiere instalación: descargar y ejecutar
 
-Ejecutable desplegado en `C:\Users\Pepito\scripts\VramMon.exe`.
+## Referencias
+
+- `vrammon.go` — fuente principal
+- `vrammon.py` — versión Python original (tkinter, mantenida como referencia)
+- `go.mod` — dependencias Go

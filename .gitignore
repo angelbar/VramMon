@@ -1,14 +1,28 @@
-# PyInstaller
-build/
-dist/
-*.spec
-*.pyc
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.spec
+dist/
+build/
 *.egg-info/
 
-# Config local del usuario (contiene rutas, no debe subirse)
-config.json
+# Go
+*.exe
+*.exe~
+*.test
+*.out
+vendor/
 
-# OS
+# Windows
 Thumbs.db
-.DS_Store
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Config local
+config.json
