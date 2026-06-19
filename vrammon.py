@@ -7,6 +7,10 @@ import subprocess
 import time
 import re
 
+# ─── StartupInfo oculto para evitar terminal fantasma ──────────
+SI_HIDDEN = subprocess.STARTUPINFO()
+SI_HIDDEN.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
 # ─── Config ───────────────────────────────────────────────────
 CONFIG_DIR = os.path.join(
     os.environ.get('APPDATA', os.path.expanduser('~')),
@@ -143,7 +147,8 @@ def get_vram_data():
         smi = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.total,memory.used,memory.free',
              '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=5,
+            startupinfo=SI_HIDDEN,
         )
         if smi.returncode != 0:
             return None
@@ -158,7 +163,8 @@ def get_vram_data():
         proc = subprocess.run(
             ['nvidia-smi', '--query-compute-apps=process_name,used_gpu_memory',
              '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=5,
+            startupinfo=SI_HIDDEN,
         )
         model_vram = 0.0
         if proc.returncode == 0 and proc.stdout.strip():
