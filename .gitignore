@@ -1,0 +1,14 @@
+# PyInstaller
+build/
+dist/
+*.spec
+*.pyc
+__pycache__/
+*.egg-info/
+
+# Config local del usuario (contiene rutas, no debe subirse)
+config.json
+
+# OS
+Thumbs.db
+.DS_Store
