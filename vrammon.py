@@ -80,7 +80,7 @@ def resize_start(e):
 
 def resize_move(e):
     w = max(320, root._resize_w + e.x - root._resize_x)
-    h = max(160, root._resize_h + e.y - root._resize_y)
+    h = max(30, root._resize_h + e.y - root._resize_y)
     root.geometry(f"{w}x{h}")
 
 # ─── Cerrar y reset ───────────────────────────────────────────
