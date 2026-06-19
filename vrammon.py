@@ -62,7 +62,7 @@ if c['x'] is not None and c['y'] is not None:
     geom += f"+{c['x']}+{c['y']}"
 root.geometry(geom)
 root.configure(bg=c['bg'])
-root.minsize(320, 160)
+root.minsize(320, 1)
 
 # ─── Arrastrar ventana ────────────────────────────────────────
 def drag_start(e):
@@ -102,7 +102,7 @@ def reset_config():
     canvas_frame.configure(bg=DEFAULT['bg'])
     legend_frame.configure(bg=DEFAULT['bg'])
     canvas.configure(bg=DEFAULT['bg'])
-    total_label.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
+    total_label.configure(bg=DEFAULT['bg'])
     bottom_bar.configure(bg=DEFAULT['bg'])
     resizer.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
     for lbl, _ in LEGEND_ITEMS:
@@ -141,14 +141,14 @@ for lbl, color in LEGEND_ITEMS:
     sq = tk.Frame(legend_frame, bg=color, width=8, height=8, bd=0, highlightthickness=0)
     sq.pack(side="left", padx=(0, 2))
     sq.pack_propagate(False)
-    lb = tk.Label(legend_frame, text=lbl, font=("Segoe UI", 7),
+    lb = tk.Label(legend_frame, text=lbl, font=("Segoe UI", 8),
                   bg=c['bg'], fg=color)
     lb.pack(side="left", padx=(0, 8))
     legend_labels[lbl] = lb
 
-# Etiqueta de total a la derecha de la leyenda
-total_label = tk.Label(legend_frame, text="", font=("Segoe UI", 7),
-                       bg=c['bg'], fg=c['fg'])
+# Etiqueta de total a la derecha de la leyenda (gris)
+total_label = tk.Label(legend_frame, text="", font=("Segoe UI", 8),
+                       bg=c['bg'], fg='#cccccc')
 total_label.pack(side="right")
 
 
@@ -242,26 +242,28 @@ def draw_bars(data):
         fill='#333333', outline='', tags='bg'
     )
 
-    # Segmentos apilados
+    # Segmentos apilados con borde entre colores
     x_offset = bar_x
-    for val, color in items:
+    colors = ['#FF00FF', '#00FFFF', '#FFFF00', '#00FF00']
+    vals = [data['modelo'], data['contexto'], data['sistema'], data['libre']]
+    for i, (val, color) in enumerate(zip(vals, colors)):
         if val <= 0:
             continue
-        seg_w = max(1, int(bar_w * (val / total)))
+        seg_w = max(2, int(bar_w * (val / total)))
         canvas.create_rectangle(
             x_offset, bar_y, x_offset + seg_w, bar_y + bar_h,
-            fill=color, outline='', tags='seg'
+            fill=color, outline='#111111', width=1, tags='seg'
         )
         x_offset += seg_w
 
-    # Texto de uso porcentual centrado
+    # Texto de uso porcentual centrado (gris)
     used = total - data['libre']
     used_pct = int(used / total * 100) if total > 0 else 0
     canvas.create_text(
         cw // 2, bar_y + bar_h // 2,
         text=f"{int(used)} / {int(total)} MB  ({used_pct}%)",
-        font=("Segoe UI", 9, "bold"),
-        fill='#ffffff', tags='text'
+        font=("Segoe UI", 10, "bold"),
+        fill='#cccccc', tags='text'
     )
 
     # Actualizar total en la leyenda
@@ -347,9 +349,9 @@ def pick_colors():
     col2 = cc.askcolor(title="Color de texto", color=c['fg'], parent=root)
     if col2 and col2[1]:
         c['fg'] = col2[1]
-        total_label.configure(fg=c['fg'])
+        total_label.configure(fg='#cccccc')
         for lbl, _ in LEGEND_ITEMS:
-            legend_labels[lbl].configure(fg=c['fg'])
+            legend_labels[lbl].configure(fg=BAR_COLORS.get(lbl, '#cccccc'))
         if _last_data:
             draw_bars(_last_data)
     save_config()
