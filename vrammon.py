@@ -102,7 +102,6 @@ def reset_config():
     canvas_frame.configure(bg=DEFAULT['bg'])
     legend_frame.configure(bg=DEFAULT['bg'])
     canvas.configure(bg=DEFAULT['bg'])
-    total_label.configure(bg=DEFAULT['bg'])
     bottom_bar.configure(bg=DEFAULT['bg'])
     resizer.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
     for lbl, _ in LEGEND_ITEMS:
@@ -146,11 +145,7 @@ for lbl, color in LEGEND_ITEMS:
     lb.pack(side="left", padx=(0, 8))
     legend_labels[lbl] = lb
 
-# Etiqueta de total a la derecha de la leyenda (gris)
-total_label = tk.Label(legend_frame, text="", font=("Segoe UI", 8),
-                       bg=c['bg'], fg='#cccccc')
-total_label.pack(side="right")
-
+# ─── Etiqueta de total eliminada (sobraba) ─────────────────────
 
 # ─── Obtener datos de VRAM ────────────────────────────────────
 def get_vram_data():
@@ -256,20 +251,15 @@ def draw_bars(data):
         )
         x_offset += seg_w
 
-    # Texto de uso porcentual centrado (gris)
+    # Texto de uso porcentual centrado (usuario elige color con 🎨)
     used = total - data['libre']
     used_pct = int(used / total * 100) if total > 0 else 0
     canvas.create_text(
         cw // 2, bar_y + bar_h // 2,
         text=f"{int(used)} / {int(total)} MB  ({used_pct}%)",
         font=("Segoe UI", 10, "bold"),
-        fill='#cccccc', tags='text'
+        fill=c['fg'], tags='text'
     )
-
-    # Actualizar total en la leyenda
-    total_label.configure(text=f"Total: {int(total)} MB")
-
-
 
 # ─── Bucle de actualización ───────────────────────────────────
 _last_data = None
@@ -340,7 +330,6 @@ def pick_colors():
         canvas_frame.configure(bg=c['bg'])
         legend_frame.configure(bg=c['bg'])
         canvas.configure(bg=c['bg'])
-        total_label.configure(bg=c['bg'])
         for lbl, _ in LEGEND_ITEMS:
             legend_labels[lbl].configure(bg=c['bg'])
         bottom_bar.configure(bg=c['bg'])
@@ -349,9 +338,6 @@ def pick_colors():
     col2 = cc.askcolor(title="Color de texto", color=c['fg'], parent=root)
     if col2 and col2[1]:
         c['fg'] = col2[1]
-        total_label.configure(fg='#cccccc')
-        for lbl, _ in LEGEND_ITEMS:
-            legend_labels[lbl].configure(fg=BAR_COLORS.get(lbl, '#cccccc'))
         if _last_data:
             draw_bars(_last_data)
     save_config()
