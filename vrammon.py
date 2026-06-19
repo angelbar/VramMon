@@ -21,8 +21,8 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 DEFAULT = {
     'bg': '#1a1a2e',
     'fg': '#ffffff',
-    'w': 480,
-    'h': 220,
+    'w': 400,
+    'h': 90,
     'x': None,
     'y': None,
 }
@@ -100,11 +100,13 @@ def reset_config():
     root.geometry(f"{DEFAULT['w']}x{DEFAULT['h']}")
     root.configure(bg=DEFAULT['bg'])
     canvas_frame.configure(bg=DEFAULT['bg'])
-    bar_frame.configure(bg=DEFAULT['bg'])
+    legend_frame.configure(bg=DEFAULT['bg'])
     canvas.configure(bg=DEFAULT['bg'])
-    title_label.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
+    total_label.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
     bottom_bar.configure(bg=DEFAULT['bg'])
     resizer.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
+    for lbl, _ in LEGEND_ITEMS:
+        legend_labels[lbl].configure(bg=DEFAULT['bg'], fg=BAR_COLORS.get(lbl, DEFAULT['fg']))
     # Resetear colores de botones
     for btn in (btn_close, btn_reset, btn_palette):
         btn.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
@@ -115,29 +117,39 @@ def reset_config():
     if _last_data:
         draw_bars(_last_data)
 
-# ─── Canvas para las barras ──────────────────────────────────
+# ─── Canvas para barra única apilada ──────────────────────────
 canvas_frame = tk.Frame(root, bg=c['bg'])
-canvas_frame.pack(expand=True, fill="both", padx=8, pady=(6, 0))
+canvas_frame.pack(expand=True, fill="both", padx=6, pady=(4, 0))
 
-# Título VRAM
-title_label = tk.Label(
-    canvas_frame, text="VRAM Monitor", font=("Segoe UI", 9, "bold"),
-    bg=c['bg'], fg=c['fg'], anchor="w",
-)
-title_label.pack(fill="x")
-
-# Frame contenedor de las 4 barras
-bar_frame = tk.Frame(canvas_frame, bg=c['bg'])
-bar_frame.pack(expand=True, fill="both", pady=(2, 0))
-
-# Canvas para dibujar las barras
-CANVAS_W = 400
-CANVAS_H = 140
 canvas = tk.Canvas(
-    bar_frame, bg=c['bg'], highlightthickness=0,
-    width=CANVAS_W, height=CANVAS_H,
+    canvas_frame, bg=c['bg'], highlightthickness=0, height=30,
 )
-canvas.pack(expand=True, fill="both")
+canvas.pack(expand=False, fill="x")
+
+# ─── Leyenda (significado de colores) ─────────────────────────
+legend_frame = tk.Frame(canvas_frame, bg=c['bg'])
+legend_frame.pack(fill="x", pady=(3, 0))
+
+LEGEND_ITEMS = [
+    ('Modelo',   '#FF00FF'),
+    ('Contexto', '#00FFFF'),
+    ('Sistema',  '#FFFF00'),
+    ('Libre',    '#00FF00'),
+]
+legend_labels = {}
+for lbl, color in LEGEND_ITEMS:
+    sq = tk.Frame(legend_frame, bg=color, width=8, height=8, bd=0, highlightthickness=0)
+    sq.pack(side="left", padx=(0, 2))
+    sq.pack_propagate(False)
+    lb = tk.Label(legend_frame, text=lbl, font=("Segoe UI", 7),
+                  bg=c['bg'], fg=color)
+    lb.pack(side="left", padx=(0, 8))
+    legend_labels[lbl] = lb
+
+# Etiqueta de total a la derecha de la leyenda
+total_label = tk.Label(legend_frame, text="", font=("Segoe UI", 7),
+                       bg=c['bg'], fg=c['fg'])
+total_label.pack(side="right")
 
 
 # ─── Obtener datos de VRAM ────────────────────────────────────
@@ -205,62 +217,56 @@ def draw_bars(data):
     canvas.delete("all")
     cw = canvas.winfo_width()
     ch = canvas.winfo_height()
-    if cw < 50 or ch < 10:
+    if cw < 50 or ch < 5:
         root.after(100, lambda: draw_bars(data) if data else None)
         return
 
-    bar_h = max(16, int((ch - 20) / 4))
-    gap = 4
-    labels_x = 5
-    bar_x = 70
-    bar_w = cw - bar_x - 8
-
-    items = [
-        ('Modelo',   data['modelo']),
-        ('Contexto', data['contexto']),
-        ('Sistema',  data['sistema']),
-        ('Libre',    data['libre']),
-    ]
     total = data['total']
+    items = [
+        (data['modelo'],   '#FF00FF'),  # Modelo
+        (data['contexto'], '#00FFFF'),  # Contexto
+        (data['sistema'],  '#FFFF00'),  # Sistema
+        (data['libre'],    '#00FF00'),  # Libre
+    ]
 
-    for i, (name, val) in enumerate(items):
-        y0 = 4 + i * (bar_h + gap)
-        y1 = y0 + bar_h
-        pct = val / total if total > 0 else 0
-        filled_w = max(0, int(bar_w * pct))
+    # Fondo oscuro de la barra
+    radius = 4
+    pad_x = 2
+    bar_x = pad_x
+    bar_w = cw - pad_x * 2
+    bar_y = 2
+    bar_h = ch - 4
 
-        # Fondo de la barra (gris oscuro)
-        canvas.create_rectangle(
-            bar_x, y0, bar_x + bar_w, y1,
-            fill='#333333', outline='', tags='bar_bg'
-        )
-        # Barra llena
-        if filled_w > 0:
-            canvas.create_rectangle(
-                bar_x, y0, bar_x + filled_w, y1,
-                fill=BAR_COLORS[name], outline='', tags='bar_fill'
-            )
-        # Etiqueta
-        canvas.create_text(
-            labels_x, y0 + bar_h // 2,
-            text=name, font=("Segoe UI", 8, "bold"),
-            fill=BAR_COLORS[name], anchor="w", tags='bar_label'
-        )
-        # Valor numérico a la derecha
-        val_text = f"{int(val)} MB ({int(pct * 100)}%)"
-        canvas.create_text(
-            cw - 4, y0 + bar_h // 2,
-            text=val_text, font=("Segoe UI", 8),
-            fill=c['fg'], anchor="e", tags='bar_val'
-        )
-
-    # Total en la parte superior
-    canvas.create_text(
-        cw // 2, ch - 2,
-        text=f"VRAM Total: {int(total)} MB",
-        font=("Segoe UI", 8),
-        fill=c['fg'], anchor="s", tags='bar_total'
+    canvas.create_rectangle(
+        bar_x, bar_y, bar_x + bar_w, bar_y + bar_h,
+        fill='#333333', outline='', tags='bg'
     )
+
+    # Segmentos apilados
+    x_offset = bar_x
+    for val, color in items:
+        if val <= 0:
+            continue
+        seg_w = max(1, int(bar_w * (val / total)))
+        canvas.create_rectangle(
+            x_offset, bar_y, x_offset + seg_w, bar_y + bar_h,
+            fill=color, outline='', tags='seg'
+        )
+        x_offset += seg_w
+
+    # Texto de uso porcentual centrado
+    used = total - data['libre']
+    used_pct = int(used / total * 100) if total > 0 else 0
+    canvas.create_text(
+        cw // 2, bar_y + bar_h // 2,
+        text=f"{int(used)} / {int(total)} MB  ({used_pct}%)",
+        font=("Segoe UI", 9, "bold"),
+        fill='#ffffff', tags='text'
+    )
+
+    # Actualizar total en la leyenda
+    total_label.configure(text=f"Total: {int(total)} MB")
+
 
 
 # ─── Bucle de actualización ───────────────────────────────────
@@ -330,16 +336,20 @@ def pick_colors():
         c['bg'] = col[1]
         root.configure(bg=c['bg'])
         canvas_frame.configure(bg=c['bg'])
-        bar_frame.configure(bg=c['bg'])
-        title_label.configure(bg=c['bg'])
+        legend_frame.configure(bg=c['bg'])
         canvas.configure(bg=c['bg'])
+        total_label.configure(bg=c['bg'])
+        for lbl, _ in LEGEND_ITEMS:
+            legend_labels[lbl].configure(bg=c['bg'])
         bottom_bar.configure(bg=c['bg'])
         if _last_data:
             draw_bars(_last_data)
     col2 = cc.askcolor(title="Color de texto", color=c['fg'], parent=root)
     if col2 and col2[1]:
         c['fg'] = col2[1]
-        title_label.configure(fg=c['fg'])
+        total_label.configure(fg=c['fg'])
+        for lbl, _ in LEGEND_ITEMS:
+            legend_labels[lbl].configure(fg=c['fg'])
         if _last_data:
             draw_bars(_last_data)
     save_config()
@@ -414,12 +424,8 @@ resizer.bind("<B1-Motion>", resize_move)
 # ─── Arrastre ─────────────────────────────────────────────────
 canvas.bind("<ButtonPress-1>", drag_start)
 canvas.bind("<B1-Motion>", drag_move)
-bar_frame.bind("<ButtonPress-1>", drag_start)
-bar_frame.bind("<B1-Motion>", drag_move)
 canvas_frame.bind("<ButtonPress-1>", drag_start)
 canvas_frame.bind("<B1-Motion>", drag_move)
-title_label.bind("<ButtonPress-1>", drag_start)
-title_label.bind("<B1-Motion>", drag_move)
 
 # ─── Cerrar con Escape ────────────────────────────────────────
 root.bind("<Escape>", lambda e: close_win())
