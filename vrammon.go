@@ -228,6 +228,11 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	cw, ch := bounds.Width, bounds.Height
 	if cw < 50 || ch < 5 { return nil }
 
+	// ── fill background ─────────────────────────────────────
+	bgBrush, _ := walk.NewSolidColorBrush(hexToWalk(mw.cfg.Bg))
+	defer bgBrush.Dispose()
+	_ = canvas.FillRectangle(bgBrush, walk.Rectangle{0, 0, cw, ch})
+
 	barH := ch - 18 // leave room for legend row
 	if barH < 10 { barH = 10 }
 	barX, barY := 2, 2
@@ -486,11 +491,11 @@ func main() {
 				Background: SolidColorBrush{Color: hexToWalk(cfg.Bg)},
 				Layout:     HBox{MarginsZero: true},
 				Children: []Widget{
-					PushButton{Text: "🎨",
+					PushButton{Text: "Colores",
 						OnClicked: func() { mw.pickColors() }},
-					PushButton{Text: "↺",
+					PushButton{Text: "Default",
 						OnClicked: func() { mw.resetCfg() }},
-					PushButton{Text: "✕",
+					PushButton{Text: "Cerrar",
 						OnClicked: func() { mw.closeWin() }},
 				},
 			},
