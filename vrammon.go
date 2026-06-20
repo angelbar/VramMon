@@ -210,10 +210,6 @@ type VramMon struct {
 
 	barWidget   *walk.CustomWidget
 	btnFrame    *walk.Composite
-	legendFrame *walk.Composite
-
-	legendLabels  []*walk.Label
-	legendSquares []*walk.Composite
 
 	buttonsVisible bool
 	hideTimer      *time.Timer
@@ -232,15 +228,17 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	cw, ch := bounds.Width, bounds.Height
 	if cw < 50 || ch < 5 { return nil }
 
+	barH := ch - 18 // leave room for legend row
+	if barH < 10 { barH = 10 }
 	barX, barY := 2, 2
-	barW, barH := cw-4, ch-4
+	barW := cw - 4
 
-	// bg
+	// ── bar bg ──────────────────────────────────────────────
 	bgB, _ := walk.NewSolidColorBrush(walk.RGB(51, 51, 51))
 	defer bgB.Dispose()
 	_ = canvas.FillRectangle(bgB, walk.Rectangle{barX, barY, barW, barH})
 
-	// segments
+	// ── segments ───────────────────────────────────────────
 	xOff := barX
 	for i, val := range vals {
 		if val <= 0 { continue }
@@ -249,14 +247,13 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		sB, _ := walk.NewSolidColorBrush(hexToWalk(mw.cfg.segColor(i)))
 		_ = canvas.FillRectangle(sB, walk.Rectangle{xOff, barY, segW, barH})
 		sB.Dispose()
-		// border
 		p, _ := walk.NewCosmeticPen(walk.PenSolid, walk.RGB(17, 17, 17))
 		_ = canvas.DrawRectanglePixels(p, walk.Rectangle{xOff, barY, segW, barH})
 		p.Dispose()
 		xOff += segW
 	}
 
-	// text
+	// ── center text ────────────────────────────────────────
 	used := total - d.Libre
 	pct := int(used / total * 100)
 	text := fmt.Sprintf("%d / %d MB  (%d%%)", int(used), int(total), pct)
@@ -266,25 +263,28 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	_ = canvas.DrawText(text, font, fg, walk.Rectangle{barX, barY, barW, barH},
 		walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
 
+	// ── legend row ─────────────────────────────────────────
+	legY := barY + barH + 3
+	lFont, _ := walk.NewFont("Segoe UI", 8, walk.FontStyle(0))
+	defer lFont.Dispose()
+	xOffLeg := 4
+	for i, name := range labelNames {
+		col := hexToWalk(mw.cfg.segColor(i))
+		// colored square
+		sqB, _ := walk.NewSolidColorBrush(col)
+		_ = canvas.FillRectangle(sqB, walk.Rectangle{xOffLeg, legY, 8, 8})
+		sqB.Dispose()
+		xOffLeg += 10
+		// label text
+		_ = canvas.DrawText(name, lFont, col, walk.Rectangle{xOffLeg, legY, 60, 12},
+			walk.TextLeft|walk.TextTop|walk.TextSingleLine)
+		xOffLeg += len(name)*9 + 8
+	}
+
 	return nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────
-
-func (mw *VramMon) updateLegend() {
-	for i, name := range labelNames {
-		col := hexToWalk(mw.cfg.segColor(i))
-		if i < len(mw.legendLabels) {
-			mw.legendLabels[i].SetText(" " + name + "  ")
-			mw.legendLabels[i].SetTextColor(col)
-		}
-		if i < len(mw.legendSquares) {
-			b, _ := walk.NewSolidColorBrush(col)
-			mw.legendSquares[i].SetBackground(b)
-			b.Dispose()
-		}
-	}
-}
 
 func (mw *VramMon) refreshBg() {
 	bg := hexToWalk(mw.cfg.Bg)
@@ -292,13 +292,7 @@ func (mw *VramMon) refreshBg() {
 	defer bgBrush.Dispose()
 	mw.SetBackground(bgBrush)
 	mw.barWidget.SetBackground(bgBrush)
-	mw.legendFrame.SetBackground(bgBrush)
 	mw.btnFrame.SetBackground(bgBrush)
-	for _, lb := range mw.legendLabels {
-		b, _ := walk.NewSolidColorBrush(bg)
-		lb.SetBackground(b)
-		b.Dispose()
-	}
 }
 
 // ─── color picker ─────────────────────────────────────────────
@@ -332,7 +326,6 @@ func (mw *VramMon) pickColors() {
 		}
 	}
 	mw.cfg.save()
-	mw.updateLegend()
 	if mw.lastData != nil { mw.barWidget.Invalidate() }
 }
 
@@ -342,7 +335,6 @@ func (mw *VramMon) resetCfg() {
 	b := mw.Bounds()
 	mw.SetBounds(walk.Rectangle{b.X, b.Y, defaultCfg.W, defaultCfg.H})
 	mw.refreshBg()
-	mw.updateLegend()
 	if mw.lastData != nil { mw.barWidget.Invalidate() }
 }
 
@@ -460,6 +452,13 @@ func main() {
 	flag.BoolVar(&debugMode, "debug", false, "print debug info to terminal")
 	flag.Parse()
 	debugLog("starting VramMon…")
+
+	// Ensure common controls are initialized (needed by walk tooltips)
+	icc := win.InitCommonControlsEx(&win.INITCOMMONCONTROLSEX{
+		DwSize: uint32(unsafe.Sizeof(win.INITCOMMONCONTROLSEX{})),
+		DwICC:  win.ICC_WIN95_CLASSES,
+	})
+	debugLog("InitCommonControlsEx: %v", icc)
 	debugLog("config path: %s", configPath)
 
 	cfg := loadConfig()
@@ -469,34 +468,6 @@ func main() {
 	}
 	mw := &VramMon{cfg: cfg}
 	mw.buttonsVisible = false
-
-	// Build legend children
-	legendChildren := []Widget{}
-	var sqRefs []**walk.Composite
-	var lbRefs []**walk.Label
-
-	for i, name := range labelNames {
-		var sq *walk.Composite
-		var lb *walk.Label
-		sqRefs = append(sqRefs, &sq)
-		lbRefs = append(lbRefs, &lb)
-
-		legendChildren = append(legendChildren,
-			Composite{
-				AssignTo:   &sq,
-				Background: SolidColorBrush{Color: hexToWalk(cfg.segColor(i))},
-				MinSize:    Size{8, 8},
-				MaxSize:    Size{8, 8},
-			},
-			Label{
-				AssignTo:   &lb,
-				Text:       " " + name + "  ",
-				TextColor:  hexToWalk(cfg.segColor(i)),
-				Font:       Font{Family: "Segoe UI", PointSize: 8},
-				Background: SolidColorBrush{Color: hexToWalk(cfg.Bg)},
-			},
-		)
-	}
 
 	err := (MainWindow{
 		AssignTo:   &mw.MainWindow,
@@ -523,21 +494,14 @@ func main() {
 						OnClicked: func() { mw.closeWin() }},
 				},
 			},
-			// bar
+			// bar (draws bar + legend in paint handler)
 			CustomWidget{
 				AssignTo:  &mw.barWidget,
-				MinSize:   Size{320, 30},
+				MinSize:   Size{320, 50},
 				Paint:     mw.onPaint,
 				OnMouseDown: mw.onBarMouseDown,
 				OnMouseMove: mw.onBarMouseMove,
 			},
-			// legend
-			Composite{
-					AssignTo:   &mw.legendFrame,
-					Layout:     HBox{MarginsZero: true, SpacingZero: true},
-					Background: SolidColorBrush{Color: hexToWalk(cfg.Bg)},
-					Children:   legendChildren,
-				},
 		},
 	}.Create())
 	if err != nil {
@@ -545,14 +509,6 @@ func main() {
 	}
 	debugLog("MainWindow created OK")
 	defer mw.Dispose()
-
-	// Register legend widgets
-	for _, ref := range sqRefs {
-		mw.legendSquares = append(mw.legendSquares, *ref)
-	}
-	for _, ref := range lbRefs {
-		mw.legendLabels = append(mw.legendLabels, *ref)
-	}
 
 	// restore position
 	if cfg.X != nil && cfg.Y != nil {
