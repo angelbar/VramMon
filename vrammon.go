@@ -213,6 +213,11 @@ type VramMon struct {
 
 	buttonsVisible bool
 	hideTimer      *time.Timer
+
+	// resize
+	resizing      bool
+	resizeMX, resizeMY int
+	resizeMW, resizeMH int
 }
 
 // ─── paint handler ────────────────────────────────────────────
@@ -284,6 +289,15 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 		_ = canvas.DrawText(name, lFont, col, walk.Rectangle{xOffLeg, legY, 60, 12},
 			walk.TextLeft|walk.TextTop|walk.TextSingleLine)
 		xOffLeg += len(name)*9 + 8
+	}
+
+	// ── resize handle ◢ ────────────────────────────────────
+	if cw > 20 && ch > 20 {
+		hFont, _ := walk.NewFont("Segoe UI", 8, walk.FontStyle(0))
+		defer hFont.Dispose()
+		_ = canvas.DrawText("◢", hFont, walk.RGB(100, 100, 100),
+			walk.Rectangle{cw - 16, ch - 16, 14, 14},
+			walk.TextRight|walk.TextBottom|walk.TextSingleLine)
 	}
 
 	return nil
@@ -358,20 +372,48 @@ func makeFrameless(hwnd win.HWND) {
 	win.InvalidateRect(hwnd, nil, true)
 }
 
-// mouse handler for bar — drag window
 func (mw *VramMon) onBarMouseDown(x, y int, btn walk.MouseButton) {
 	if btn != walk.LeftButton { return }
+	// Use barWidget dimensions for the resize zone
+	bw := mw.barWidget.Bounds().Width
+	bh := mw.barWidget.Bounds().Height
+	if x >= bw-18 && y >= bh-18 {
+		// start resize
+		mw.resizing = true
+		mw.resizeMX = x
+		mw.resizeMY = y
+		mw.resizeMW = bw
+		mw.resizeMH = bh
+		return
+	}
+	// drag window
 	win.ReleaseCapture()
 	win.SendMessage(mw.Handle(), win.WM_NCLBUTTONDOWN, win.HTCAPTION, 0)
 }
 
-// mouse handler for bar — show/hide buttons
 func (mw *VramMon) onBarMouseMove(x, y int, btn walk.MouseButton) {
-	// y is relative to barWidget
+	if mw.resizing {
+		dx := x - mw.resizeMX
+		dy := y - mw.resizeMY
+		nw := mw.resizeMW + dx
+		nh := mw.resizeMH + dy
+		if nw < 320 { nw = 320 }
+		if nh < 50 { nh = 50 }
+		b := mw.Bounds()
+		mw.SetBounds(walk.Rectangle{b.X, b.Y, nw, nh})
+		return
+	}
+	// show/hide buttons
 	if y < 30 {
 		mw.showButtons()
 	} else {
 		mw.scheduleHideButtons()
+	}
+}
+
+func (mw *VramMon) onBarMouseUp(x, y int, btn walk.MouseButton) {
+	if btn == walk.LeftButton && mw.resizing {
+		mw.resizing = false
 	}
 }
 
@@ -506,6 +548,7 @@ func main() {
 				Paint:     mw.onPaint,
 				OnMouseDown: mw.onBarMouseDown,
 				OnMouseMove: mw.onBarMouseMove,
+				OnMouseUp:   mw.onBarMouseUp,
 			},
 		},
 	}.Create())
