@@ -440,9 +440,15 @@ func main() {
 
 	// Build legend children
 	legendChildren := []Widget{}
+	var sqRefs []**walk.Composite
+	var lbRefs []**walk.Label
+
 	for i, name := range labelNames {
 		var sq *walk.Composite
 		var lb *walk.Label
+		sqRefs = append(sqRefs, &sq)
+		lbRefs = append(lbRefs, &lb)
+
 		legendChildren = append(legendChildren,
 			Composite{
 				AssignTo:   &sq,
@@ -458,16 +464,12 @@ func main() {
 				Background: SolidColorBrush{Color: hexToWalk(cfg.Bg)},
 			},
 		)
-		defer func() {
-			mw.legendSquares = append(mw.legendSquares, sq)
-			mw.legendLabels = append(mw.legendLabels, lb)
-		}()
 	}
 
 	err := (MainWindow{
 		AssignTo:   &mw.MainWindow,
 		Title:      "VramMon",
-		Size:       Size{cfg.W, cfg.H},
+		Bounds:     Rectangle{Width: cfg.W, Height: cfg.H},
 		MinSize:    Size{320, 1},
 		Background: SolidColorBrush{Color: hexToWalk(cfg.Bg)},
 
@@ -499,16 +501,25 @@ func main() {
 			},
 			// legend
 			Composite{
-				AssignTo: &mw.legendFrame,
-				Layout:   HBox{MarginsZero: true, SpacingZero: true},
-				Children: legendChildren,
-			},
+					AssignTo:   &mw.legendFrame,
+					Layout:     HBox{MarginsZero: true, SpacingZero: true},
+					Background: SolidColorBrush{Color: hexToWalk(cfg.Bg)},
+					Children:   legendChildren,
+				},
 		},
 	}.Create())
 	if err != nil {
 		panic(err)
 	}
 	defer mw.Dispose()
+
+	// Register legend widgets
+	for _, ref := range sqRefs {
+		mw.legendSquares = append(mw.legendSquares, *ref)
+	}
+	for _, ref := range lbRefs {
+		mw.legendLabels = append(mw.legendLabels, *ref)
+	}
 
 	// restore position
 	if cfg.X != nil && cfg.Y != nil {
