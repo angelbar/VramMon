@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,16 @@ import (
 	. "github.com/lxn/walk/declarative"
 	"github.com/lxn/win"
 )
+
+// ─── debug ────────────────────────────────────────────────────
+
+var debugMode bool
+
+func debugLog(f string, args ...interface{}) {
+	if debugMode {
+		log.Printf("[VramMon] "+f, args...)
+	}
+}
 
 // ─── constants ────────────────────────────────────────────────
 
@@ -88,9 +100,11 @@ func loadConfig() Config {
 	cfg := defaultCfg
 	data, err := os.ReadFile(configPath)
 	if err != nil {
+		debugLog("no config file, using defaults")
 		return cfg
 	}
 	_ = json.Unmarshal(data, &cfg)
+	debugLog("loaded config: %s", string(data))
 	if cfg.ColorModelo == "" { cfg.ColorModelo = defaultCfg.ColorModelo }
 	if cfg.ColorContexto == "" { cfg.ColorContexto = defaultCfg.ColorContexto }
 	if cfg.ColorSistema == "" { cfg.ColorSistema = defaultCfg.ColorSistema }
@@ -141,7 +155,11 @@ func getVRAMData() *VRAMData {
 		"--format=csv,noheader,nounits")
 	cmd1.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out1, err := cmd1.Output()
-	if err != nil { return nil }
+	debugLog("nvidia-smi query: %s", strings.TrimSpace(string(out1)))
+	if err != nil {
+		debugLog("nvidia-smi failed: %v", err)
+		return nil
+	}
 	parts := strings.Split(strings.TrimSpace(string(out1)), ",")
 	if len(parts) < 3 { return nil }
 	total, _ := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
@@ -413,7 +431,12 @@ func (mw *VramMon) startTicker() {
 
 func (mw *VramMon) fetch() {
 	data := getVRAMData()
-	if data == nil { return }
+	if data == nil {
+		debugLog("getVRAMData returned nil")
+		return
+	}
+	debugLog("data: total=%.0f modelo=%.0f ctx=%.0f sys=%.0f libre=%.0f",
+		data.Total, data.Modelo, data.Contexto, data.Sistema, data.Libre)
 	mw.lastData = data
 	mw.Synchronize(func() { mw.barWidget.Invalidate() })
 }
@@ -434,7 +457,16 @@ func (mw *VramMon) closeWin() {
 // ─── main ─────────────────────────────────────────────────────
 
 func main() {
+	flag.BoolVar(&debugMode, "debug", false, "print debug info to terminal")
+	flag.Parse()
+	debugLog("starting VramMon…")
+	debugLog("config path: %s", configPath)
+
 	cfg := loadConfig()
+	debugLog("config loaded: bg=%s fg=%s w=%d h=%d", cfg.Bg, cfg.Fg, cfg.W, cfg.H)
+	if cfg.X != nil {
+		debugLog("saved position: x=%d y=%d", *cfg.X, *cfg.Y)
+	}
 	mw := &VramMon{cfg: cfg}
 	mw.buttonsVisible = false
 
@@ -509,8 +541,9 @@ func main() {
 		},
 	}.Create())
 	if err != nil {
-		panic(err)
+		log.Fatalf("Create() failed: %v", err)
 	}
+	debugLog("MainWindow created OK")
 	defer mw.Dispose()
 
 	// Register legend widgets
@@ -528,6 +561,7 @@ func main() {
 
 	// frameless
 	makeFrameless(mw.Handle())
+	debugLog("makeFrameless done, bounds: %v", mw.Bounds())
 
 	// wire button frame events
 	mw.btnFrame.MouseMove().Attach(mw.onBtnFrameMouseMove)
