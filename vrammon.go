@@ -94,7 +94,6 @@ var defaultCfg = Config{
 }
 
 var colorKeys = []string{"color_modelo", "color_contexto", "color_sistema", "color_libre"}
-var labelNames = []string{"Modelo", "Contexto", "Sistema", "Libre"}
 
 func loadConfig() Config {
 	cfg := defaultCfg
@@ -116,25 +115,6 @@ func (c *Config) save() {
 	_ = os.MkdirAll(appDataDir, 0755)
 	data, _ := json.Marshal(c)
 	_ = os.WriteFile(configPath, data, 0644)
-}
-
-func (c *Config) segColor(i int) string {
-	switch i {
-	case 0: return c.ColorModelo
-	case 1: return c.ColorContexto
-	case 2: return c.ColorSistema
-	case 3: return c.ColorLibre
-	}
-	return "#ffffff"
-}
-
-func (c *Config) setSeg(i int, v string) {
-	switch i {
-	case 0: c.ColorModelo = v
-	case 1: c.ColorContexto = v
-	case 2: c.ColorSistema = v
-	case 3: c.ColorLibre = v
-	}
 }
 
 // ─── vram data ────────────────────────────────────────────────
@@ -196,8 +176,10 @@ func getVRAMData() *VRAMData {
 	sistema := usedTotal - modelVRAM
 	if sistema < 0 { sistema = 0 }
 	contexto := modelVRAM * 0.15
+	modelo := modelVRAM - contexto
+	if modelo < 0 { modelo = 0 }
 
-	return &VRAMData{Total: total, Modelo: modelVRAM, Contexto: contexto, Sistema: sistema, Libre: free}
+	return &VRAMData{Total: total, Modelo: modelo, Contexto: contexto, Sistema: sistema, Libre: free}
 }
 
 // ─── main window ──────────────────────────────────────────────
@@ -228,7 +210,18 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	d := mw.lastData
 	total := d.Total
 	if total <= 0 { return nil }
-	vals := []float64{d.Modelo, d.Contexto, d.Sistema, d.Libre}
+
+	type seg struct {
+		name  string
+		val   float64
+		color string
+	}
+	order := []seg{
+		{"Sistema", d.Sistema, mw.cfg.ColorSistema},
+		{"Modelo", d.Modelo, mw.cfg.ColorModelo},
+		{"Contexto", d.Contexto, mw.cfg.ColorContexto},
+		{"Libre", d.Libre, mw.cfg.ColorLibre},
+	}
 
 	cw, ch := bounds.Width, bounds.Height
 	if cw < 50 || ch < 5 { return nil }
@@ -250,11 +243,11 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 
 	// ── segments ───────────────────────────────────────────
 	xOff := barX
-	for i, val := range vals {
-		if val <= 0 { continue }
-		segW := int(float64(barW) * (val / total))
+	for _, s := range order {
+		if s.val <= 0 { continue }
+		segW := int(float64(barW) * (s.val / total))
 		if segW < 2 { segW = 2 }
-		sB, _ := walk.NewSolidColorBrush(hexToWalk(mw.cfg.segColor(i)))
+		sB, _ := walk.NewSolidColorBrush(hexToWalk(s.color))
 		_ = canvas.FillRectangle(sB, walk.Rectangle{xOff, barY, segW, barH})
 		sB.Dispose()
 		p, _ := walk.NewCosmeticPen(walk.PenSolid, walk.RGB(17, 17, 17))
@@ -278,10 +271,10 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	lFont, _ := walk.NewFont("Segoe UI", 8, walk.FontStyle(0))
 	defer lFont.Dispose()
 	xOffLeg := 4
-	for i, name := range labelNames {
-		col := hexToWalk(mw.cfg.segColor(i))
-		pct := int(vals[i] / total * 100)
-		label := fmt.Sprintf("%s [%d]", name, pct)
+	for _, s := range order {
+		col := hexToWalk(s.color)
+		pct := int(s.val / total * 100)
+		label := fmt.Sprintf("%s [%d]", s.name, pct)
 		// colored square
 		sqB, _ := walk.NewSolidColorBrush(col)
 		_ = canvas.FillRectangle(sqB, walk.Rectangle{xOffLeg, legY, 8, 8})
@@ -341,9 +334,18 @@ func (mw *VramMon) pickColors() {
 		mw.cfg.Fg = r
 		if mw.lastData != nil { mw.barWidget.Invalidate() }
 	}
-	for i, name := range labelNames {
-		if r, ok := cc("Color — "+name, mw.cfg.segColor(i)); ok {
-			mw.cfg.setSeg(i, r)
+	for _, s := range []struct {
+		name string
+		get  func() string
+		set  func(string)
+	}{
+		{"Sistema", func() string { return mw.cfg.ColorSistema }, func(v string) { mw.cfg.ColorSistema = v }},
+		{"Modelo", func() string { return mw.cfg.ColorModelo }, func(v string) { mw.cfg.ColorModelo = v }},
+		{"Contexto", func() string { return mw.cfg.ColorContexto }, func(v string) { mw.cfg.ColorContexto = v }},
+		{"Libre", func() string { return mw.cfg.ColorLibre }, func(v string) { mw.cfg.ColorLibre = v }},
+	} {
+		if r, ok := cc("Color — "+s.name, s.get()); ok {
+			s.set(r)
 		}
 	}
 	mw.cfg.save()
