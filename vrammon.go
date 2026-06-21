@@ -280,15 +280,17 @@ func (mw *VramMon) onPaint(canvas *walk.Canvas, bounds walk.Rectangle) error {
 	xOffLeg := 4
 	for i, name := range labelNames {
 		col := hexToWalk(mw.cfg.segColor(i))
+		pct := int(vals[i] / total * 100)
+		label := fmt.Sprintf("%s [%d]", name, pct)
 		// colored square
 		sqB, _ := walk.NewSolidColorBrush(col)
 		_ = canvas.FillRectangle(sqB, walk.Rectangle{xOffLeg, legY, 8, 8})
 		sqB.Dispose()
 		xOffLeg += 10
 		// label text
-		_ = canvas.DrawText(name, lFont, col, walk.Rectangle{xOffLeg, legY, 60, 12},
+		_ = canvas.DrawText(label, lFont, col, walk.Rectangle{xOffLeg, legY, 80, 12},
 			walk.TextLeft|walk.TextTop|walk.TextSingleLine)
-		xOffLeg += len(name)*9 + 8
+		xOffLeg += len(label)*8 + 8
 	}
 
 	// ── resize handle ◢ ────────────────────────────────────
