@@ -1,3 +1,17 @@
+"""
+VramMon — Monitor multi-dispositivo de VRAM/memoria
+
+Arquitectura:
+  1. discover_devices() → detecta GPUs NVIDIA, AMD, Intel, y memoria unificada
+  2. sample_device(dev) → colecta datos por backend para cada dispositivo
+  3. UI dibuja una barra por dispositivo + barra agregada total
+
+Backends implementados:
+  - nvidia  → nvidia-smi (multi-GPU, PID classification)
+  - wmi     → Windows WMI + pdh (fallback para AMD/Intel sin ROCm)
+  - unified → memoria compartida CPU+GPU (Apple Silicon, Intel iGPU)
+"""
+
 import sys
 import json
 import os
@@ -6,152 +20,226 @@ import tkinter.colorchooser as cc
 import subprocess
 import time
 import re
+from typing import List, Optional, Dict, Tuple
 
-# ─── StartupInfo oculto para evitar terminal fantasma ──────────
+# ─── StartupInfo oculto ──────────────────────────
 SI_HIDDEN = subprocess.STARTUPINFO()
 SI_HIDDEN.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-# ─── Config ───────────────────────────────────────────────────
-CONFIG_DIR = os.path.join(
-    os.environ.get('APPDATA', os.path.expanduser('~')),
-    'VramMon'
-)
-CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
+# ─── Modelo de datos ─────────────────────────────
+class Device:
+    __slots__ = ('name', 'backend', 'device_id', 'total_mb', 'is_unified')
+    def __init__(self, name: str, backend: str, device_id: int,
+                 total_mb: float, is_unified: bool = False):
+        self.name = name
+        self.backend = backend       # 'nvidia' | 'amd' | 'intel' | 'wmi' | 'unified'
+        self.device_id = device_id   # 0, 1, 2… o -1 para unified
+        self.total_mb = total_mb
+        self.is_unified = is_unified
 
-DEFAULT = {
-    'bg': '#1a1a2e',
-    'fg': '#ffffff',
-    'w': 400,
-    'h': 90,
-    'x': None,
-    'y': None,
-    'color_modelo':   '#FF00FF',
-    'color_contexto': '#00FFFF',
-    'color_sistema':  '#FFFF00',
-    'color_libre':    '#00FF00',
-}
+    @property
+    def key(self) -> str:
+        return f"{self.backend}:{self.device_id}"
 
-COLOR_KEYS = ['color_modelo', 'color_contexto', 'color_sistema', 'color_libre']
-LABELS = ['Modelo', 'Contexto', 'Sistema', 'Libre']
+    @property
+    def label(self) -> str:
+        name = self.name.split('\n')[0].strip()
+        if self.is_unified:
+            return f"🧠 {name}"
+        return f"🎮 {name}"
+
+class Sample:
+    """Muestra puntual de un dispositivo."""
+    __slots__ = ('total', 'used', 'free', 'model_mb', 'context_mb', 'system_mb')
+    def __init__(self, total=0.0, used=0.0, free=0.0,
+                 model_mb=0.0, context_mb=0.0, system_mb=0.0):
+        self.total = total
+        self.used = used
+        self.free = free
+        self.model_mb = model_mb
+        self.context_mb = context_mb
+        self.system_mb = system_mb
 
 
-def load_config():
+# ═══════════════════════════════════════════════════
+#  DESCUBRIMIENTO
+# ═══════════════════════════════════════════════════
+
+def discover_devices() -> List[Device]:
+    """Enumera todos los dispositivos con memoria aprovechables."""
+    devices: List[Device] = []
+    seen_keys: set = set()
+
+    # 1) NVIDIA — nvidia-smi (multi-GPU nativo)
     try:
-        with open(CONFIG_FILE) as f:
-            return {**DEFAULT, **json.load(f)}
-    except Exception:
-        return dict(DEFAULT)
-
-
-def save_config():
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    keys = ('bg', 'fg', 'w', 'h', 'x', 'y') + tuple(COLOR_KEYS)
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump({k: c[k] for k in keys}, f)
-
-
-c = load_config()
-
-# ─── Ventana principal ────────────────────────────────────────
-root = tk.Tk()
-root.title("VramMon")
-root.overrideredirect(True)
-geom = f"{c['w']}x{c['h']}"
-if c['x'] is not None and c['y'] is not None:
-    geom += f"+{c['x']}+{c['y']}"
-root.geometry(geom)
-root.configure(bg=c['bg'])
-root.minsize(320, 1)
-
-# ─── Arrastrar ventana ────────────────────────────────────────
-def drag_start(e):
-    root._dx, root._dy = e.x, e.y
-
-def drag_move(e):
-    x = root.winfo_x() + e.x - root._dx
-    y = root.winfo_y() + e.y - root._dy
-    root.geometry(f"+{x}+{y}")
-
-# ─── Redimensionar ────────────────────────────────────────────
-def resize_start(e):
-    root._resize_x, root._resize_y = e.x, e.y
-    root._resize_w, root._resize_h = root.winfo_width(), root.winfo_height()
-
-def resize_move(e):
-    w = max(320, root._resize_w + e.x - root._resize_x)
-    h = max(30, root._resize_h + e.y - root._resize_y)
-    root.geometry(f"{w}x{h}")
-
-# ─── Cerrar y reset ───────────────────────────────────────────
-def close_win():
-    c['w'], c['h'] = root.winfo_width(), root.winfo_height()
-    c['x'], c['y'] = root.winfo_x(), root.winfo_y()
-    save_config()
-    root.destroy()
-
-
-def reset_config():
-    try:
-        os.remove(CONFIG_FILE)
+        out = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,name,memory.total',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5, startupinfo=SI_HIDDEN,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            for line in out.stdout.strip().split('\n'):
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) >= 3:
+                    idx, gpu_name, mem_total = parts[0], parts[1], parts[2]
+                    key = f"nvidia:{idx}"
+                    if key not in seen_keys:
+                        devices.append(Device(
+                            name=gpu_name, backend='nvidia',
+                            device_id=int(idx), total_mb=float(mem_total),
+                        ))
+                        seen_keys.add(key)
     except Exception:
         pass
-    # Restaurar defaults en la ventana
-    root.geometry(f"{DEFAULT['w']}x{DEFAULT['h']}")
-    root.configure(bg=DEFAULT['bg'])
-    canvas_frame.configure(bg=DEFAULT['bg'])
-    legend_frame.configure(bg=DEFAULT['bg'])
-    canvas.configure(bg=DEFAULT['bg'])
-    bottom_bar.configure(bg=DEFAULT['bg'])
-    resizer.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
-    for lbl, ckey in zip(LABELS, COLOR_KEYS):
-        legend_labels[lbl].configure(bg=DEFAULT['bg'], fg=DEFAULT[ckey])
-        legend_squares[lbl].configure(bg=DEFAULT[ckey])
-    # Resetear colores de botones
-    for btn in (btn_close, btn_reset, btn_palette):
-        btn.configure(bg=DEFAULT['bg'], fg=DEFAULT['fg'])
-    # Recargar config en memoria
-    c.clear()
-    c.update(DEFAULT)
-    # Redibujar barras
-    if _last_data:
-        draw_bars(_last_data)
 
-# ─── Canvas para barra única apilada ──────────────────────────
-canvas_frame = tk.Frame(root, bg=c['bg'])
-canvas_frame.pack(expand=True, fill="both", padx=6, pady=(4, 0))
-
-canvas = tk.Canvas(
-    canvas_frame, bg=c['bg'], highlightthickness=0, height=30,
-)
-canvas.pack(expand=False, fill="x")
-
-# ─── Leyenda (significado de colores) ─────────────────────────
-legend_frame = tk.Frame(canvas_frame, bg=c['bg'])
-legend_frame.pack(fill="x", pady=(3, 0))
-
-legend_squares = {}
-legend_labels = {}
-for lbl, ckey in zip(LABELS, COLOR_KEYS):
-    sq = tk.Frame(legend_frame, bg=c[ckey], width=8, height=8, bd=0, highlightthickness=0)
-    sq.pack(side="left", padx=(0, 2))
-    sq.pack_propagate(False)
-    legend_squares[lbl] = sq
-    lb = tk.Label(legend_frame, text=lbl, font=("Segoe UI", 8),
-                  bg=c['bg'], fg=c[ckey])
-    lb.pack(side="left", padx=(0, 8))
-    legend_labels[lbl] = lb
-
-# ─── Etiqueta de total eliminada (sobraba) ─────────────────────
-
-# ─── Obtener datos de VRAM ────────────────────────────────────
-def get_vram_data():
+    # 2) AMD — rocm-smi (si está instalado)
     try:
-        # Global
+        out = subprocess.run(
+            ['rocm-smi', '--showmeminfo', 'vram', '--json'],
+            capture_output=True, text=True, timeout=5, startupinfo=SI_HIDDEN,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            try:
+                data = json.loads(out.stdout)
+                for card_id, info in data.items():
+                    key = f"amd:{card_id}"
+                    if key not in seen_keys and 'vram_total' in info:
+                        total_mb = float(info['vram_total']) / 1024 / 1024  # bytes → MB
+                        devices.append(Device(
+                            name=f"AMD {card_id}", backend='amd',
+                            device_id=int(re.search(r'\d+', card_id).group()) if re.search(r'\d+', card_id) else 0,
+                            total_mb=total_mb,
+                        ))
+                        seen_keys.add(key)
+            except (json.JSONDecodeError, KeyError, ValueError, AttributeError):
+                pass
+    except Exception:
+        pass
+
+    # 3) WMI — Windows: detecta GPUs que no cubrieron NVIDIA/AMD arriba
+    try:
+        out = subprocess.run(
+            ['wmic', 'path', 'Win32_VideoController',
+             'get', 'Name,AdapterRAM,VideoProcessor',
+             '/format:csv'],
+            capture_output=True, text=True, timeout=5, startupinfo=SI_HIDDEN,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            lines = [l.strip() for l in out.stdout.split('\n') if l.strip()]
+            headers = lines[0].split(',')
+            try:
+                name_idx = headers.index('Name')
+                ram_idx = headers.index('AdapterRAM')
+                proc_idx = headers.index('VideoProcessor')
+            except ValueError:
+                name_idx, ram_idx, proc_idx = 0, 1, 2
+
+            for raw_line in lines[1:]:
+                cols = raw_line.split(',')
+                if len(cols) <= max(name_idx, ram_idx, proc_idx):
+                    continue
+                wmi_name = cols[name_idx].strip()
+                wmi_ram_bytes = cols[ram_idx].strip()
+                wmi_proc = cols[proc_idx].strip() if len(cols) > proc_idx else ''
+
+                # Saltar si ya lo cubrió nvidia-smi
+                is_nvidia = 'nvidia' in wmi_name.lower()
+                if is_nvidia and any(d.backend == 'nvidia' for d in devices):
+                    continue
+
+                # Saltar AMD si ya lo cubrió rocm-smi
+                is_amd = 'amd' in wmi_name.lower() or 'radeon' in wmi_name.lower()
+                if is_amd and any(d.backend == 'amd' for d in devices):
+                    continue
+
+                # Detectar unified: Intel Graphics, Microsoft Basic Display
+                is_intel = 'intel' in wmi_name.lower()
+                is_basic = 'basic' in wmi_name.lower()
+                is_unified = is_intel or is_basic
+
+                try:
+                    ram_mb = float(wmi_ram_bytes) / (1024 * 1024)
+                except (ValueError, TypeError):
+                    ram_mb = 0
+
+                # Intel iGPU suele reportar 0 en AdapterRAM pero comparte RAM del sistema
+                if is_intel and ram_mb < 1:
+                    ram_mb = _get_system_ram_mb() * 0.3  # ~30% de la RAM total estimado
+
+                if ram_mb > 0:
+                    key_base = 'intel' if is_intel else 'wmi'
+                    card_idx = sum(1 for d in devices if d.backend in ('intel', 'wmi'))
+                    key = f"{key_base}:{card_idx}"
+                    if key not in seen_keys:
+                        devices.append(Device(
+                            name=wmi_name, backend=key_base,
+                            device_id=card_idx, total_mb=ram_mb,
+                            is_unified=is_unified,
+                        ))
+                        seen_keys.add(key)
+    except Exception:
+        pass
+
+    # 4) Apple Silicon / memoria unificada (solo en macOS)
+    if sys.platform == 'darwin':
+        try:
+            out = subprocess.run(
+                ['sysctl', '-n', 'hw.memsize'],
+                capture_output=True, text=True, timeout=3,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                total_bytes = float(out.stdout.strip())
+                total_mb = total_bytes / (1024 * 1024)
+                devices.append(Device(
+                    name="Apple Unified Memory", backend='unified',
+                    device_id=-1, total_mb=total_mb, is_unified=True,
+                ))
+        except Exception:
+            pass
+
+    return devices
+
+
+def _get_system_ram_mb() -> float:
+    """Obtiene RAM total del sistema (Windows)."""
+    try:
+        out = subprocess.run(
+            ['wmic', 'ComputerSystem', 'get', 'TotalPhysicalMemory',
+             '/format:csv'],
+            capture_output=True, text=True, timeout=5, startupinfo=SI_HIDDEN,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            lines = [l.strip() for l in out.stdout.split('\n') if l.strip()]
+            if len(lines) >= 2:
+                val = lines[1].split(',')[-1].strip()
+                return float(val) / (1024 * 1024)
+    except Exception:
+        pass
+    return 0
+
+
+# ═══════════════════════════════════════════════════
+#  MUESTREO POR BACKEND
+# ═══════════════════════════════════════════════════
+
+def sample_device(dev: Device) -> Optional[Sample]:
+    """Toma una muestra del dispositivo según su backend."""
+    if dev.backend == 'nvidia':
+        return _sample_nvidia(dev)
+    elif dev.backend in ('amd', 'wmi', 'intel', 'unified'):
+        return _sample_wmi_fallback(dev)
+    return None
+
+
+def _sample_nvidia(dev: Device) -> Optional[Sample]:
+    """nvidia-smi con --id para GPU específica."""
+    idx = dev.device_id
+    try:
         smi = subprocess.run(
-            ['nvidia-smi', '--query-gpu=memory.total,memory.used,memory.free',
+            ['nvidia-smi', f'--id={idx}',
+             '--query-gpu=memory.total,memory.used,memory.free',
              '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, timeout=5,
-            startupinfo=SI_HIDDEN,
+            capture_output=True, text=True, timeout=5, startupinfo=SI_HIDDEN,
         )
         if smi.returncode != 0:
             return None
@@ -161,62 +249,354 @@ def get_vram_data():
         total = float(parts[0].strip())
         used_total = float(parts[1].strip())
         free = float(parts[2].strip())
-
-        # Procesos
-        proc = subprocess.run(
-            ['nvidia-smi', '--query-compute-apps=process_name,used_gpu_memory',
-             '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, timeout=5,
-            startupinfo=SI_HIDDEN,
-        )
-        model_vram = 0.0
-        if proc.returncode == 0 and proc.stdout.strip():
-            for line in proc.stdout.strip().split('\n'):
-                if not line.strip():
-                    continue
-                pdata = line.split(',')
-                if len(pdata) < 2:
-                    continue
-                pname = pdata[0].strip().lower()
-                raw_mem = pdata[1].strip()
-                try:
-                    mem_val = float(raw_mem)
-                except ValueError:
-                    continue
-                if re.search(r'python|llama|ollama|studio|cuda|ai|tensor|vllm|text-generation|lmstudio', pname):
-                    model_vram += mem_val
-
-        overhead_base = 850
-        if model_vram == 0 and used_total > overhead_base:
-            model_vram = used_total - overhead_base
-
-        sistema = max(0, used_total - model_vram)
-        contexto = model_vram * 0.15
-
-        return {
-            'total': total,
-            'modelo': model_vram,
-            'contexto': contexto,
-            'sistema': sistema,
-            'libre': free,
-        }
     except Exception:
         return None
 
+    # Procesos IA por PID en esta GPU
+    model_vram = 0.0
+    try:
+        proc = subprocess.run(
+            ['nvidia-smi', f'--id={idx}',
+             '--query-compute-apps=pid,process_name,used_gpu_memory',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5, startupinfo=SI_HIDDEN,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            for line in proc.stdout.strip().split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                pdata = [p.strip() for p in line.split(',')]
+                if len(pdata) < 3:
+                    continue
+                pname = pdata[1].lower()
+                try:
+                    mem_val = float(pdata[2])
+                except (ValueError, IndexError):
+                    continue
+                if re.search(
+                    r'python|llama|ollama|studio|cuda|ai|tensor|vllm|'
+                    r'lmstudio|text-generation|transformer|diffus|'
+                    r'kobold|oobabooga|textgen|jan|koboldcpp',
+                    pname
+                ):
+                    model_vram += mem_val
+    except Exception:
+        pass
 
-def draw_bars(data):
+    # Heurística de overhead dinámico
+    overhead = min(850, used_total * 0.12) if used_total > 0 else 0
+    if model_vram == 0 and used_total > overhead:
+        model_vram = used_total - overhead
+    elif model_vram > used_total:
+        model_vram = used_total
+
+    system_mb = max(0, used_total - model_vram)
+    modelo_pesos = model_vram * 0.85
+    contexto = model_vram * 0.15
+
+    return Sample(
+        total=total, used=used_total, free=free,
+        model_mb=modelo_pesos, context_mb=contexto, system_mb=system_mb,
+    )
+
+
+def _sample_wmi_fallback(dev: Device) -> Optional[Sample]:
+    """
+    Fallback vía WMI para GPUs sin nvidia-smi.
+    Lectura de performance counters o estimación.
+    """
+    # Intentar leer contador de rendimiento de GPU
+    try:
+        # PowerShell query para GPU performance
+        ps_cmd = (
+            f'Get-Counter "\\GPU Process Memory(*)\\Dedicated Usage" '
+            f'-ErrorAction SilentlyContinue | '
+            f'Select-Object -ExpandProperty CounterSamples | '
+            f'Where-Object {{ $_.Status -eq 0 }} | '
+            f'Measure-Object -Property CookedValue -Sum | '
+            f'Select-Object -ExpandProperty Sum'
+        )
+        out = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', ps_cmd],
+            capture_output=True, text=True, timeout=5, startupinfo=SI_HIDDEN,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            try:
+                used_mb = float(out.stdout.strip()) / (1024 * 1024)  # bytes → MB
+            except ValueError:
+                used_mb = 0
+        else:
+            used_mb = 0
+    except Exception:
+        used_mb = 0
+
+    # Si no hay contador, estimar: asumir ~40% usado como baseline
+    if used_mb <= 0:
+        used_mb = dev.total_mb * 0.4
+
+    used_mb = min(used_mb, dev.total_mb)
+    free_mb = dev.total_mb - used_mb
+
+    return Sample(
+        total=dev.total_mb, used=used_mb, free=free_mb,
+        model_mb=0, context_mb=0, system_mb=used_mb,
+    )
+
+
+# ═══════════════════════════════════════════════════
+#  CONFIGURACIÓN
+# ═══════════════════════════════════════════════════
+
+CONFIG_DIR = os.path.join(
+    os.environ.get('APPDATA', os.path.expanduser('~')),
+    'VramMon'
+)
+CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
+
+DEFAULT = {
+    'bg': '#1a1a2e',
+    'fg': '#ffffff',
+    'w': 460,
+    'h': 240,
+    'x': None,
+    'y': None,
+    'color_modelo':   '#FF00FF',
+    'color_contexto': '#00FFFF',
+    'color_sistema':  '#FFFF00',
+    'color_libre':    '#00FF00',
+    'compact_mode':   False,   # False = una barra por GPU, True = agregado total
+}
+COLOR_KEYS = ['color_sistema', 'color_modelo', 'color_contexto', 'color_libre']
+LABELS = ['Sistema', 'Modelo', 'Contexto', 'Libre']
+
+
+def load_config() -> dict:
+    try:
+        with open(CONFIG_FILE) as f:
+            return {**DEFAULT, **json.load(f)}
+    except Exception:
+        return dict(DEFAULT)
+
+
+def save_config(cfg: dict):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    keys = ('bg', 'fg', 'w', 'h', 'x', 'y') + tuple(COLOR_KEYS) + ('compact_mode',)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump({k: cfg[k] for k in keys}, f)
+
+
+c = load_config()
+
+
+# ═══════════════════════════════════════════════════
+#  UI
+# ═══════════════════════════════════════════════════
+
+root = tk.Tk()
+root.title("VramMon")
+root.overrideredirect(True)
+geom = f"{c['w']}x{c['h']}"
+if c['x'] is not None and c['y'] is not None:
+    geom += f"+{c['x']}+{c['y']}"
+root.geometry(geom)
+root.configure(bg=c['bg'])
+root.minsize(400, 60)
+
+_devices: List[Device] = discover_devices()
+_last_samples: Dict[str, Sample] = {}
+_last_aggregate: Optional[Sample] = None
+_compact_mode = c.get('compact_mode', False)
+
+
+# ─── Arrastrar ventana ───────────────────────────
+def drag_start(e):
+    root._dx, root._dy = e.x, e.y
+
+def drag_move(e):
+    x = root.winfo_x() + e.x - root._dx
+    y = root.winfo_y() + e.y - root._dy
+    root.geometry(f"+{x}+{y}")
+
+# ─── Redimensionar ───────────────────────────────
+def resize_start(e):
+    root._resize_x, root._resize_y = e.x, e.y
+    root._resize_w, root._resize_h = root.winfo_width(), root.winfo_height()
+
+def resize_move(e):
+    w = max(400, root._resize_w + e.x - root._resize_x)
+    h = max(60, root._resize_h + e.y - root._resize_y)
+    root.geometry(f"{w}x{h}")
+
+# ─── Cerrar y reset ──────────────────────────────
+def close_win():
+    c['w'], c['h'] = root.winfo_width(), root.winfo_height()
+    c['x'], c['y'] = root.winfo_x(), root.winfo_y()
+    save_config(c)
+    root.destroy()
+
+def reset_config():
+    global c
+    try:
+        os.remove(CONFIG_FILE)
+    except Exception:
+        pass
+    c.clear()
+    c.update(DEFAULT)
+    root.configure(bg=DEFAULT['bg'])
+    main_frame.configure(bg=DEFAULT['bg'])
+    for w in device_frames.values():
+        w.destroy()
+    device_frames.clear()
+    _rebuild_ui()
+    if _last_aggregate:
+        _draw_all(_last_samples, _last_aggregate)
+
+
+# ═══════════════════════════════════════════════════
+#  CONSTRUCCIÓN DINÁMICA DE UI
+# ═══════════════════════════════════════════════════
+
+main_frame = tk.Frame(root, bg=c['bg'])
+main_frame.pack(expand=True, fill="both", padx=4, pady=(4, 0))
+
+device_frames: Dict[str, dict] = {}  # device_key -> {'frame', 'canvas', 'legend_frame', 'label', 'bars'}
+compact_display: Optional[dict] = None  # {frame, canvas, legend_frame, label}
+
+def _rebuild_ui():
+    """(Re)construye los paneles por dispositivo."""
+    global compact_display, _devices, device_frames
+
+    # Limpiar
+    for w in main_frame.winfo_children():
+        w.destroy()
+    device_frames.clear()
+    compact_display = None
+
+    _devices = discover_devices()
+
+    if not _devices:
+        lbl = tk.Label(main_frame, text="❌ No se detectaron GPUs",
+                       font=("Segoe UI", 11), bg=c['bg'], fg='#ff6666')
+        lbl.pack(expand=True)
+        return
+
+    if _compact_mode:
+        # Una sola barra: agregado total
+        fd = tk.Frame(main_frame, bg=c['bg'])
+        fd.pack(expand=True, fill="both")
+        canvas = tk.Canvas(fd, bg=c['bg'], highlightthickness=0)
+        canvas.pack(expand=True, fill="both")
+        legend_frame = tk.Frame(fd, bg=c['bg'])
+        legend_frame.pack(side="bottom", fill="x", pady=(0, 2))
+        compact_display = {
+            'frame': fd,
+            'canvas': canvas,
+            'legend_frame': legend_frame,
+            'bars': {},  # legend objects
+        }
+        # Construir leyenda
+        squares_labels = _build_legend(legend_frame)
+        compact_display['bars'] = squares_labels
+    else:
+        # Una barra por GPU
+        for dev in _devices:
+            dev_frame = tk.Frame(main_frame, bg=c['bg'])
+            dev_frame.pack(expand=True, fill="both", pady=(1, 0))
+
+            # Label del dispositivo
+            lbl = tk.Label(dev_frame, text=dev.label,
+                           font=("Segoe UI", 8, "bold"),
+                           bg=c['bg'], fg=c['fg'], anchor='w')
+            lbl.pack(fill="x", padx=2)
+
+            canvas = tk.Canvas(dev_frame, bg=c['bg'], highlightthickness=0)
+            canvas.pack(expand=True, fill="both")
+
+            legend_frame = tk.Frame(dev_frame, bg=c['bg'])
+            legend_frame.pack(side="bottom", fill="x", pady=(0, 2))
+
+            squares_labels = _build_legend(legend_frame)
+
+            device_frames[dev.key] = {
+                'frame': dev_frame,
+                'canvas': canvas,
+                'legend_frame': legend_frame,
+                'label': lbl,
+                'bars': squares_labels,
+            }
+
+    root.after(10, _first_sample)
+
+
+def _build_legend(parent_frame) -> dict:
+    """Crea los cuadritos + labels de leyenda. Retorna dict con 'squares' y 'labels'."""
+    bars_info = {'squares': {}, 'labels': {}}
+    for lbl, ckey in zip(LABELS, COLOR_KEYS):
+        sq = tk.Frame(parent_frame, bg=c[ckey], width=8, height=8,
+                       bd=0, highlightthickness=0)
+        sq.pack(side="left", padx=(0, 2))
+        sq.pack_propagate(False)
+        bars_info['squares'][lbl] = sq
+
+        lb = tk.Label(parent_frame, text=lbl, font=("Segoe UI", 7),
+                      bg=c['bg'], fg=c[ckey])
+        lb.pack(side="left", padx=(0, 8))
+        bars_info['labels'][lbl] = lb
+    return bars_info
+
+
+# ═══════════════════════════════════════════════════
+#  MUESTREO Y DIBUJO
+# ═══════════════════════════════════════════════════
+
+def _first_sample():
+    """Primera ronda de muestreo con flush de UI."""
+    _update_all()
+
+
+def _update_all():
+    global _last_samples, _last_aggregate
+    samples: Dict[str, Sample] = {}
+    agg_total = agg_used = agg_free = 0.0
+    agg_model = agg_ctx = agg_sys = 0.0
+
+    for dev in _devices:
+        try:
+            s = sample_device(dev)
+        except Exception:
+            s = None
+        if s is not None:
+            samples[dev.key] = s
+            agg_total += s.total
+            agg_used += s.used
+            agg_free += s.free
+            agg_model += s.model_mb
+            agg_ctx += s.context_mb
+            agg_sys += s.system_mb
+
+    _last_samples = samples
+    _last_aggregate = Sample(agg_total, agg_used, agg_free, agg_model, agg_ctx, agg_sys)
+
+    _draw_all(samples, _last_aggregate)
+    root.after(5000, _update_all)
+
+
+def _draw_bar(canvas: tk.Canvas, bars_info: dict, data: Sample, compact=False):
+    """Dibuja una barra apilada en el canvas dado."""
     canvas.delete("all")
     cw = canvas.winfo_width()
     ch = canvas.winfo_height()
-    if cw < 50 or ch < 5:
-        root.after(100, lambda: draw_bars(data) if data else None)
+
+    if cw < 20 or ch < 5:
         return
 
-    total = data['total']
-    vals = [data['modelo'], data['contexto'], data['sistema'], data['libre']]
+    total = data.total
+    if total <= 0:
+        return
+    vals = [data.system_mb, data.model_mb, data.context_mb, data.free]
 
-    # Fondo oscuro de la barra
-    radius = 4
+    # Fondo
     pad_x = 2
     bar_x = pad_x
     bar_w = cw - pad_x * 2
@@ -228,129 +608,165 @@ def draw_bars(data):
         fill='#333333', outline='', tags='bg'
     )
 
-    # Segmentos apilados con borde entre colores
+    # Segmentos apilados
     x_offset = bar_x
+    remaining_pixels = bar_w
+    seg_count = sum(1 for v in vals if v > 0)
     for i, val in enumerate(vals):
         if val <= 0:
             continue
-        seg_w = max(2, int(bar_w * (val / total)))
+        seg_count -= 1
+        if seg_count == 0:
+            seg_w = remaining_pixels
+        else:
+            frac = val / total
+            seg_w = max(1, int(round(bar_w * frac)))
+            seg_w = min(seg_w, remaining_pixels - seg_count)
         canvas.create_rectangle(
             x_offset, bar_y, x_offset + seg_w, bar_y + bar_h,
             fill=c[COLOR_KEYS[i]], outline='#111111', width=1, tags='seg'
         )
         x_offset += seg_w
+        remaining_pixels -= seg_w
 
-    # Texto de uso porcentual centrado (usuario elige color con 🎨)
-    used = total - data['libre']
+    # Actualizar leyendas con porcentajes
+    for lbl, val in zip(LABELS, vals):
+        pct = int(val / total * 100) if total > 0 else 0
+        if lbl in bars_info.get('labels', {}):
+            bars_info['labels'][lbl].configure(text=f"{lbl} [{pct}]")
+
+    # Texto central
+    used = total - data.free
     used_pct = int(used / total * 100) if total > 0 else 0
     canvas.create_text(
         cw // 2, bar_y + bar_h // 2,
         text=f"{int(used)} / {int(total)} MB  ({used_pct}%)",
-        font=("Segoe UI", 10, "bold"),
+        font=("Segoe UI", 9, "bold"),
         fill=c['fg'], tags='text'
     )
 
-# ─── Bucle de actualización ───────────────────────────────────
-_last_data = None
 
-def update_vram():
-    global _last_data
-    data = get_vram_data()
-    if data is not None:
-        _last_data = data
-        draw_bars(data)
-    root.after(5000, update_vram)
+def _draw_all(samples: Dict[str, Sample], aggregate: Sample):
+    """Dibuja todas las barras (agregada o por dispositivo)."""
+    if _compact_mode and compact_display:
+        # Barra agregada única
+        canvas = compact_display['canvas']
+        bars_info = compact_display['bars']
+        _draw_bar(canvas, bars_info, aggregate)
+    else:
+        for dev in _devices:
+            if dev.key not in device_frames:
+                continue
+            info = device_frames[dev.key]
+            data = samples.get(dev.key)
+            if data is None:
+                continue
+            # Actualizar etiqueta con uso actual
+            pct = int(data.used / data.total * 100) if data.total > 0 else 0
+            info['label'].configure(text=f"{dev.label}  —  {int(data.used)}/{int(data.total)} MB ({pct}%)")
+            _draw_bar(info['canvas'], info['bars'], data)
 
 
-# ─── Botones flotantes ────────────────────────────────────────
+# ═══════════════════════════════════════════════════
+#  MENÚ FLOTANTE (HOVER)
+# ═══════════════════════════════════════════════════
+
 ZONA_ALTURA = 30
 HIDE_DELAY = 300
 _hide_timer = None
 _buttons_visible = False
 
-btn_frame = tk.Frame(root, bg=c['bg'], bd=0, highlightthickness=0)
+MENU_BG = "#333333"
+MENU_FG = "#FFFFFF"
+MENU_HOVER = "#505050"
+MENU_CLOSE_HOVER = "#CC3333"
+
+btn_frame = tk.Frame(root, bg=MENU_BG, bd=0, highlightthickness=0)
 
 btn_close = tk.Label(
-    btn_frame, text="✕", font=("Segoe UI", 11, "bold"),
-    bg=c['bg'], fg=c['fg'], cursor="hand2", padx=6,
+    btn_frame, text="Cerrar", font=("Segoe UI", 10, "bold"),
+    bg=MENU_BG, fg=MENU_FG, cursor="hand2", padx=8,
 )
 btn_close.pack(side="right")
 
 btn_reset = tk.Label(
-    btn_frame, text="↺", font=("Segoe UI", 11),
-    bg=c['bg'], fg=c['fg'], cursor="hand2", padx=6,
+    btn_frame, text="Reset", font=("Segoe UI", 10),
+    bg=MENU_BG, fg=MENU_FG, cursor="hand2", padx=8,
 )
 btn_reset.pack(side="right")
 
 btn_palette = tk.Label(
-    btn_frame, text="🎨", font=("Segoe UI", 10),
-    bg=c['bg'], fg=c['fg'], cursor="hand2", padx=6,
+    btn_frame, text="Color", font=("Segoe UI", 10),
+    bg=MENU_BG, fg=MENU_FG, cursor="hand2", padx=8,
 )
 btn_palette.pack(side="right")
 
+# Botón para alternar modo compacto
+btn_mode = tk.Label(
+    btn_frame, text="Compacto", font=("Segoe UI", 10),
+    bg=MENU_BG, fg=MENU_FG, cursor="hand2", padx=8,
+)
+btn_mode.pack(side="right")
 
-def on_close_enter(e):
-    btn_close.configure(bg="#cc3333", fg="white")
+# Botón redescubrir dispositivos
+btn_rescan = tk.Label(
+    btn_frame, text="↻ GPUs", font=("Segoe UI", 10),
+    bg=MENU_BG, fg=MENU_FG, cursor="hand2", padx=8,
+)
+btn_rescan.pack(side="right")
 
-def on_close_leave(e):
-    btn_close.configure(bg=c['bg'], fg=c['fg'])
 
+# Eventos hover
+def _on_close_enter(e):
+    btn_close.configure(bg=MENU_CLOSE_HOVER, fg="white")
+def _on_close_leave(e):
+    btn_close.configure(bg=MENU_BG, fg=MENU_FG)
 btn_close.bind("<Button-1>", lambda e: close_win())
-btn_close.bind("<Enter>", on_close_enter)
-btn_close.bind("<Leave>", on_close_leave)
+btn_close.bind("<Enter>", _on_close_enter)
+btn_close.bind("<Leave>", _on_close_leave)
 
-
-def on_reset_enter(e):
-    btn_reset.configure(bg="#555555")
-
-def on_reset_leave(e):
-    btn_reset.configure(bg=c['bg'], fg=c['fg'])
-
+def _on_reset_enter(e):
+    btn_reset.configure(bg=MENU_HOVER)
+def _on_reset_leave(e):
+    btn_reset.configure(bg=MENU_BG, fg=MENU_FG)
 btn_reset.bind("<Button-1>", lambda e: reset_config())
-btn_reset.bind("<Enter>", on_reset_enter)
-btn_reset.bind("<Leave>", on_reset_leave)
+btn_reset.bind("<Enter>", _on_reset_enter)
+btn_reset.bind("<Leave>", _on_reset_leave)
 
-
-def pick_colors():
-    col = cc.askcolor(title="Color de fondo", color=c['bg'], parent=root)
-    if col and col[1]:
-        c['bg'] = col[1]
-        root.configure(bg=c['bg'])
-        canvas_frame.configure(bg=c['bg'])
-        legend_frame.configure(bg=c['bg'])
-        canvas.configure(bg=c['bg'])
-        for lbl in LABELS:
-            legend_labels[lbl].configure(bg=c['bg'])
-        bottom_bar.configure(bg=c['bg'])
-        if _last_data:
-            draw_bars(_last_data)
-    col2 = cc.askcolor(title="Color de texto", color=c['fg'], parent=root)
-    if col2 and col2[1]:
-        c['fg'] = col2[1]
-        if _last_data:
-            draw_bars(_last_data)
-    for lbl, ckey in zip(LABELS, COLOR_KEYS):
-        col3 = cc.askcolor(title=f"Color — {lbl}", color=c[ckey], parent=root)
-        if col3 and col3[1]:
-            c[ckey] = col3[1]
-            legend_squares[lbl].configure(bg=c[ckey])
-            legend_labels[lbl].configure(fg=c[ckey])
-    save_config()
-    if _last_data:
-        draw_bars(_last_data)
-
-
-def on_palette_enter(e):
-    btn_palette.configure(bg="#444444")
-
-def on_palette_leave(e):
-    btn_palette.configure(bg=c['bg'], fg=c['fg'])
-
+def _on_palette_enter(e):
+    btn_palette.configure(bg=MENU_HOVER)
+def _on_palette_leave(e):
+    btn_palette.configure(bg=MENU_BG, fg=MENU_FG)
 btn_palette.bind("<Button-1>", lambda e: pick_colors())
-btn_palette.bind("<Enter>", on_palette_enter)
-btn_palette.bind("<Leave>", on_palette_leave)
+btn_palette.bind("<Enter>", _on_palette_enter)
+btn_palette.bind("<Leave>", _on_palette_leave)
 
-# ─── Lógica hover ─────────────────────────────────────────────
+def _on_mode_enter(e):
+    btn_mode.configure(bg=MENU_HOVER)
+def _on_mode_leave(e):
+    btn_mode.configure(bg=MENU_BG, fg=MENU_FG)
+def toggle_mode(e):
+    global _compact_mode
+    _compact_mode = not _compact_mode
+    c['compact_mode'] = _compact_mode
+    save_config(c)
+    _rebuild_ui()
+btn_mode.bind("<Button-1>", toggle_mode)
+btn_mode.bind("<Enter>", _on_mode_enter)
+btn_mode.bind("<Leave>", _on_mode_leave)
+
+def _on_rescan_enter(e):
+    btn_rescan.configure(bg=MENU_HOVER)
+def _on_rescan_leave(e):
+    btn_rescan.configure(bg=MENU_BG, fg=MENU_FG)
+def rescan_devices(e):
+    _rebuild_ui()
+btn_rescan.bind("<Button-1>", rescan_devices)
+btn_rescan.bind("<Enter>", _on_rescan_enter)
+btn_rescan.bind("<Leave>", _on_rescan_leave)
+
+
+# Hover logic
 def _mostrar_botones():
     global _buttons_visible
     if not _buttons_visible:
@@ -362,9 +778,6 @@ def _ocultar_botones():
     _hide_timer = None
     _buttons_visible = False
     btn_frame.place_forget()
-    btn_close.configure(bg=c['bg'], fg=c['fg'])
-    btn_reset.configure(bg=c['bg'], fg=c['fg'])
-    btn_palette.configure(bg=c['bg'], fg=c['fg'])
 
 def _cancelar_ocultar():
     global _hide_timer
@@ -391,30 +804,52 @@ root.bind_all("<Motion>", _on_motion)
 btn_frame.bind("<Enter>", lambda e: _cancelar_ocultar())
 btn_frame.bind("<Leave>", lambda e: _programar_ocultar())
 
-# ─── Redimensionador ──────────────────────────────────────────
-bottom_bar = tk.Frame(root, bg=c['bg'], cursor="size_nw_se", height=10)
+
+def pick_colors():
+    col = cc.askcolor(title="Color de fondo", color=c['bg'], parent=root)
+    if col and col[1]:
+        c['bg'] = col[1]
+        root.configure(bg=c['bg'])
+        main_frame.configure(bg=c['bg'])
+        if _last_aggregate:
+            _draw_all(_last_samples, _last_aggregate)
+    col2 = cc.askcolor(title="Color de texto", color=c['fg'], parent=root)
+    if col2 and col2[1]:
+        c['fg'] = col2[1]
+        if _last_aggregate:
+            _draw_all(_last_samples, _last_aggregate)
+    for lbl, ckey in zip(LABELS, COLOR_KEYS):
+        col3 = cc.askcolor(title=f"Color — {lbl}", color=c[ckey], parent=root)
+        if col3 and col3[1]:
+            c[ckey] = col3[1]
+    save_config(c)
+    if _last_aggregate:
+        _rebuild_ui()
+
+
+# ─── Redimensionador ─────────────────────────────
+bottom_bar = tk.Frame(root, bg=MENU_BG, cursor="size_nw_se", height=12)
 bottom_bar.pack(side="bottom", fill="x")
 
 resizer = tk.Label(
-    bottom_bar, text="◢", font=("Segoe UI", 14),
-    bg=c['bg'], fg=c['fg'],
+    bottom_bar, text="◢", font=("Segoe UI", 10),
+    bg=MENU_BG, fg=MENU_FG,
 )
-resizer.pack(side="right", padx=(0, 2), pady=(0, 2))
+resizer.pack(side="right")
 
 bottom_bar.bind("<ButtonPress-1>", resize_start)
 bottom_bar.bind("<B1-Motion>", resize_move)
 resizer.bind("<ButtonPress-1>", resize_start)
 resizer.bind("<B1-Motion>", resize_move)
 
-# ─── Arrastre ─────────────────────────────────────────────────
-canvas.bind("<ButtonPress-1>", drag_start)
-canvas.bind("<B1-Motion>", drag_move)
-canvas_frame.bind("<ButtonPress-1>", drag_start)
-canvas_frame.bind("<B1-Motion>", drag_move)
+# ─── Arrastre ────────────────────────────────────
+for widget in (main_frame,):
+    widget.bind("<ButtonPress-1>", drag_start)
+    widget.bind("<B1-Motion>", drag_move)
 
-# ─── Cerrar con Escape ────────────────────────────────────────
+# ─── Cerrar con Escape ──────────────────────────
 root.bind("<Escape>", lambda e: close_win())
 
-# ─── Iniciar ──────────────────────────────────────────────────
-update_vram()
+# ─── Iniciar ─────────────────────────────────────
+_rebuild_ui()
 root.mainloop()
