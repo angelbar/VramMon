@@ -171,9 +171,17 @@ Botones en barra superior (colores fijos, no configurables):
 | Segmento Contexto | `#00FFFF` |
 | Segmento Libre | `#00FF00` |
 
+## Preview
+
+![VramMon](sample_capture.png)
+
+*VramMon monitoreando RTX 3060 12GB — modo normal (izquierda) con barra por GPU*
+
 ## Distribución
 
+- Compañía: **eData101** (https://edata101.com)
 - Código fuente: `~/Desa/VramMon/vrammon.py`
 - Binario compilado: `~/scripts/VramMon.exe`
+- Repo: https://github.com/angelbar/VramMon
 - No requiere instalación: descargar/compilar y ejecutar
 - Config persistente en: `%APPDATA%/VramMon/config.json`
