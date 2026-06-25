@@ -357,6 +357,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 DEFAULT = {
     'bg': '#1a1a2e',
     'fg': '#ffffff',
+    'color_header': '#FFFFFF',
     'w': 460,
     'h': 240,
     'x': None,
@@ -365,7 +366,7 @@ DEFAULT = {
     'color_contexto': '#00FFFF',
     'color_sistema':  '#FFFF00',
     'color_libre':    '#00FF00',
-    'compact_mode':   False,   # False = una barra por GPU, True = agregado total
+    'compact_mode':   False,
 }
 COLOR_KEYS = ['color_sistema', 'color_modelo', 'color_contexto', 'color_libre']
 LABELS = ['Sistema', 'Modelo', 'Contexto', 'Libre']
@@ -381,7 +382,7 @@ def load_config() -> dict:
 
 def save_config(cfg: dict):
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    keys = ('bg', 'fg', 'w', 'h', 'x', 'y') + tuple(COLOR_KEYS) + ('compact_mode',)
+    keys = ('bg', 'fg', 'color_header', 'w', 'h', 'x', 'y') + tuple(COLOR_KEYS) + ('compact_mode',)
     with open(CONFIG_FILE, 'w') as f:
         json.dump({k: cfg[k] for k in keys}, f)
 
@@ -409,24 +410,50 @@ _last_aggregate: Optional[Sample] = None
 _compact_mode = c.get('compact_mode', False)
 
 
-# ─── Arrastrar ventana ───────────────────────────
-def drag_start(e):
-    root._dx, root._dy = e.x, e.y
+# ─── Arrastrar ventana / Redimensionar (bind_all con flags) ────
+_drag_mode = False
+_resize_mode = False
 
-def drag_move(e):
-    x = root.winfo_x() + e.x - root._dx
-    y = root.winfo_y() + e.y - root._dy
-    root.geometry(f"+{x}+{y}")
+def _on_press(e):
+    global _drag_mode, _resize_mode
+    # Detectar zona de resize: últimos 200px de ancho × 18px de alto (esquina inferior)
+    mx = e.x_root - root.winfo_rootx()
+    my = e.y_root - root.winfo_rooty()
+    win_w = root.winfo_width()
+    win_h = root.winfo_height()
+    if mx >= win_w - 200 and my >= win_h - 18:
+        _resize_mode = True
+        _drag_mode = False
+        root._resize_x_root = e.x_root
+        root._resize_y_root = e.y_root
+        root._resize_w = win_w
+        root._resize_h = win_h
+    elif _is_draggable(e):
+        _drag_mode = True
+        _resize_mode = False
+        root._dx, root._dy = e.x, e.y
+    else:
+        _drag_mode = False
+        _resize_mode = False
 
-# ─── Redimensionar ───────────────────────────────
-def resize_start(e):
-    root._resize_x, root._resize_y = e.x, e.y
-    root._resize_w, root._resize_h = root.winfo_width(), root.winfo_height()
+def _on_motion(e):
+    if _resize_mode:
+        w = max(400, root._resize_w + e.x_root - root._resize_x_root)
+        h = max(60, root._resize_h + e.y_root - root._resize_y_root)
+        root.geometry(f"{w}x{h}")
+    elif _drag_mode:
+        x = root.winfo_x() + e.x - root._dx
+        y = root.winfo_y() + e.y - root._dy
+        root.geometry(f"+{x}+{y}")
 
-def resize_move(e):
-    w = max(400, root._resize_w + e.x - root._resize_x)
-    h = max(60, root._resize_h + e.y - root._resize_y)
-    root.geometry(f"{w}x{h}")
+def _on_release(e):
+    global _drag_mode, _resize_mode
+    _drag_mode = False
+    _resize_mode = False
+
+root.bind_all("<ButtonPress-1>", _on_press)
+root.bind_all("<B1-Motion>", _on_motion)
+root.bind_all("<ButtonRelease-1>", _on_release)
 
 # ─── Cerrar y reset ──────────────────────────────
 def close_win():
@@ -487,64 +514,37 @@ def _rebuild_ui():
         fd.pack(expand=True, fill="both")
         canvas = tk.Canvas(fd, bg=c['bg'], highlightthickness=0)
         canvas.pack(expand=True, fill="both")
-        legend_frame = tk.Frame(fd, bg=c['bg'])
-        legend_frame.pack(side="bottom", fill="x", pady=(0, 2))
         compact_display = {
             'frame': fd,
             'canvas': canvas,
-            'legend_frame': legend_frame,
-            'bars': {},  # legend objects
         }
-        # Construir leyenda
-        squares_labels = _build_legend(legend_frame)
-        compact_display['bars'] = squares_labels
     else:
         # Una barra por GPU
         for dev in _devices:
             dev_frame = tk.Frame(main_frame, bg=c['bg'])
             dev_frame.pack(expand=True, fill="both", pady=(1, 0))
 
-            # Label del dispositivo
-            lbl = tk.Label(dev_frame, text=dev.label,
+            # Header del dispositivo (texto inverso al BG general)
+            header_frame = tk.Frame(dev_frame, bg=c['bg'])
+            header_frame.pack(fill="x")
+            lbl = tk.Label(header_frame, text=dev.label,
                            font=("Segoe UI", 8, "bold"),
-                           bg=c['bg'], fg=c['fg'], anchor='w')
-            lbl.pack(fill="x", padx=2)
+                           bg=c['bg'], fg=c['color_header'], anchor='w')
+            lbl.pack(fill="x", padx=4, pady=1)
 
             canvas = tk.Canvas(dev_frame, bg=c['bg'], highlightthickness=0)
             canvas.pack(expand=True, fill="both")
 
-            legend_frame = tk.Frame(dev_frame, bg=c['bg'])
-            legend_frame.pack(side="bottom", fill="x", pady=(0, 2))
-
-            squares_labels = _build_legend(legend_frame)
-
             device_frames[dev.key] = {
                 'frame': dev_frame,
                 'canvas': canvas,
-                'legend_frame': legend_frame,
                 'label': lbl,
-                'bars': squares_labels,
             }
 
     root.after(10, _first_sample)
 
 
-def _build_legend(parent_frame) -> dict:
-    """Crea los cuadritos + labels de leyenda. Retorna dict con 'squares' y 'labels'."""
-    bars_info = {'squares': {}, 'labels': {}}
-    for lbl, ckey in zip(LABELS, COLOR_KEYS):
-        sq = tk.Frame(parent_frame, bg=c[ckey], width=8, height=8,
-                       bd=0, highlightthickness=0)
-        sq.pack(side="left", padx=(0, 2))
-        sq.pack_propagate(False)
-        bars_info['squares'][lbl] = sq
-
-        lb = tk.Label(parent_frame, text=lbl, font=("Segoe UI", 7),
-                      bg=c['bg'], fg=c[ckey])
-        lb.pack(side="left", padx=(0, 8))
-        bars_info['labels'][lbl] = lb
-    return bars_info
-
+# ─── Leyenda dibujada en el canvas (no más Frame/Labels externos) ──
 
 # ═══════════════════════════════════════════════════
 #  MUESTREO Y DIBUJO
@@ -552,6 +552,7 @@ def _build_legend(parent_frame) -> dict:
 
 def _first_sample():
     """Primera ronda de muestreo con flush de UI."""
+    root.update_idletasks()  # forzar layout real antes de dibujar
     _update_all()
 
 
@@ -582,13 +583,14 @@ def _update_all():
     root.after(5000, _update_all)
 
 
-def _draw_bar(canvas: tk.Canvas, bars_info: dict, data: Sample, compact=False):
-    """Dibuja una barra apilada en el canvas dado."""
+def _draw_bar(canvas: tk.Canvas, data: Sample, compact=False):
+    """Dibuja barra apilada + leyenda al fondo dentro del canvas."""
     canvas.delete("all")
     cw = canvas.winfo_width()
     ch = canvas.winfo_height()
 
     if cw < 20 or ch < 5:
+        root.after(100, lambda: _draw_bar(canvas, data, compact))
         return
 
     total = data.total
@@ -596,19 +598,21 @@ def _draw_bar(canvas: tk.Canvas, bars_info: dict, data: Sample, compact=False):
         return
     vals = [data.system_mb, data.model_mb, data.context_mb, data.free]
 
-    # Fondo
-    pad_x = 2
-    bar_x = pad_x
-    bar_w = cw - pad_x * 2
-    bar_y = 2
-    bar_h = ch - 4
+    # Layout: barra arriba | línea | barra de estado (leyenda izq + ◢ der)
+    status_h = 18
+    bar_y = 4
+    bar_h = max(5, ch - bar_y - status_h - 6)  # 6 = gaps
+    bar_w = cw - 4
+    bar_x = 2
+    status_y = ch - status_h
 
+    # ── Fondo de la barra ──
     canvas.create_rectangle(
         bar_x, bar_y, bar_x + bar_w, bar_y + bar_h,
         fill='#333333', outline='', tags='bg'
     )
 
-    # Segmentos apilados
+    # ── Segmentos apilados ──
     x_offset = bar_x
     remaining_pixels = bar_w
     seg_count = sum(1 for v in vals if v > 0)
@@ -629,13 +633,38 @@ def _draw_bar(canvas: tk.Canvas, bars_info: dict, data: Sample, compact=False):
         x_offset += seg_w
         remaining_pixels -= seg_w
 
-    # Actualizar leyendas con porcentajes
-    for lbl, val in zip(LABELS, vals):
+    # ── Barra de estado: leyenda izq + ◢ der ──
+    # Fondo del color general de la ventana
+    canvas.create_rectangle(
+        0, status_y, cw, ch,
+        fill=c['bg'], outline='', tags='status_bg'
+    )
+    # Línea separadora sutil
+    canvas.create_line(
+        0, status_y, cw, status_y,
+        fill="#444444", width=1, tags='status_sep'
+    )
+    # Leyenda a la izquierda
+    x = 6
+    for i, (lbl, val) in enumerate(zip(LABELS, vals)):
         pct = int(val / total * 100) if total > 0 else 0
-        if lbl in bars_info.get('labels', {}):
-            bars_info['labels'][lbl].configure(text=f"{lbl} [{pct}]")
+        text = f"■ {lbl} [{pct}]"
+        canvas.create_text(
+            x, status_y + status_h // 2,
+            anchor="w", text=text,
+            font=("Segoe UI", 7, "bold"),
+            fill=c[COLOR_KEYS[i]],
+        )
+        x += len(text) * 5.5 + 6
+    # ◢ a la derecha
+    canvas.create_text(
+        cw - 4, status_y + status_h // 2,
+        anchor="e", text="◢",
+        font=("Segoe UI", 14, "bold"),
+        fill=c['fg'], tags='resize_handle'
+    )
 
-    # Texto central
+    # ── Texto de uso porcentual centrado ──
     used = total - data.free
     used_pct = int(used / total * 100) if total > 0 else 0
     canvas.create_text(
@@ -649,10 +678,8 @@ def _draw_bar(canvas: tk.Canvas, bars_info: dict, data: Sample, compact=False):
 def _draw_all(samples: Dict[str, Sample], aggregate: Sample):
     """Dibuja todas las barras (agregada o por dispositivo)."""
     if _compact_mode and compact_display:
-        # Barra agregada única
         canvas = compact_display['canvas']
-        bars_info = compact_display['bars']
-        _draw_bar(canvas, bars_info, aggregate)
+        _draw_bar(canvas, aggregate)
     else:
         for dev in _devices:
             if dev.key not in device_frames:
@@ -661,10 +688,11 @@ def _draw_all(samples: Dict[str, Sample], aggregate: Sample):
             data = samples.get(dev.key)
             if data is None:
                 continue
-            # Actualizar etiqueta con uso actual
             pct = int(data.used / data.total * 100) if data.total > 0 else 0
-            info['label'].configure(text=f"{dev.label}  —  {int(data.used)}/{int(data.total)} MB ({pct}%)")
-            _draw_bar(info['canvas'], info['bars'], data)
+            info['label'].configure(
+                text=f"{dev.label}  —  {int(data.used)}/{int(data.total)} MB ({pct}%)"
+            )
+            _draw_bar(info['canvas'], data)
 
 
 # ═══════════════════════════════════════════════════
@@ -818,6 +846,9 @@ def pick_colors():
         c['fg'] = col2[1]
         if _last_aggregate:
             _draw_all(_last_samples, _last_aggregate)
+    col_h = cc.askcolor(title="Color del header", color=c['color_header'], parent=root)
+    if col_h and col_h[1]:
+        c['color_header'] = col_h[1]
     for lbl, ckey in zip(LABELS, COLOR_KEYS):
         col3 = cc.askcolor(title=f"Color — {lbl}", color=c[ckey], parent=root)
         if col3 and col3[1]:
@@ -827,25 +858,13 @@ def pick_colors():
         _rebuild_ui()
 
 
-# ─── Redimensionador ─────────────────────────────
-bottom_bar = tk.Frame(root, bg=MENU_BG, cursor="size_nw_se", height=12)
-bottom_bar.pack(side="bottom", fill="x")
-
-resizer = tk.Label(
-    bottom_bar, text="◢", font=("Segoe UI", 10),
-    bg=MENU_BG, fg=MENU_FG,
-)
-resizer.pack(side="right")
-
-bottom_bar.bind("<ButtonPress-1>", resize_start)
-bottom_bar.bind("<B1-Motion>", resize_move)
-resizer.bind("<ButtonPress-1>", resize_start)
-resizer.bind("<B1-Motion>", resize_move)
-
-# ─── Arrastre ────────────────────────────────────
-for widget in (main_frame,):
-    widget.bind("<ButtonPress-1>", drag_start)
-    widget.bind("<B1-Motion>", drag_move)
+# ─── Arrastre (bind_all para cubrir todos los widgets) ─────────
+def _is_draggable(e):
+    """No arrastrar si el click es sobre botones del menú."""
+    w = e.widget
+    if w == btn_frame or w in btn_frame.winfo_children():
+        return False
+    return True
 
 # ─── Cerrar con Escape ──────────────────────────
 root.bind("<Escape>", lambda e: close_win())

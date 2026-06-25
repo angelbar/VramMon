@@ -99,38 +99,39 @@ nvidia-smi --id={index} --query-compute-apps=pid,process_name,used_gpu_memory
 ## Funcionalidades
 
 - **Descubrimiento automático** al inicio y bajo demanda (↻ GPUs)
-- **Multi-GPU**: una barra apilada por dispositivo, cada una con su label
+- **Multi-GPU**: una barra apilada por dispositivo, cada una con su header
 - **Modo compacto**: toggle que fusiona todas las GPUs en una sola barra agregada
 - **4 segmentos** por barra: **Sistema** (amarillo), **Modelo** (magenta), **Contexto** (cyan), **Libre** (verde)
 - Texto centrado en cada barra: `3248 / 12288 MB (26%)`
-- Leyenda con cuadros de color y porcentajes al fondo: `■Sistema [5] ■Modelo [50] ■Ctx [9] ■Libre [36]`
-- Ventana **sin bordes** (overrideredirect), arrastrable desde cualquier área
-- Redimensionable desde barra inferior (◢)
+- Header de dispositivo con color independiente (configurable)
+- Leyenda con porcentajes + ◢ en la **misma línea** al fondo (leyenda izq, ◢ der)
+- Ventana **sin bordes** (overrideredirect), arrastrable desde cualquier área (bind_all)
+- Redimensionable desde la esquina inferior derecha (zona 200×18px, ◢ dentro del canvas)
 - Menú hover superior al pasar el mouse por los primeros 30px
-- Selector de color nativo de Windows para fondo, texto y cada segmento
+- Selector de color nativo de Windows para fondo, texto, header y cada segmento
 - Botón **Reset** para restaurar colores por defecto
 - Actualización automática cada 5 segundos
 - Sin terminal/consola fantasma (`STARTF_USESHOWWINDOW` en subprocess)
 - Cerrar con Escape
 - Persistencia de posición, tamaño, colores, modo compacto
 
-## Layout (modo multi-GPU)
+## Layout
 
 ```
-┌──────────────────────────────────────────────────┐
-│ ─── 🎮 NVIDIA GeForce RTX 3060 ──── 1024/12288 │
-│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
-│ 1024 / 12288 MB  (8%)                            │
-│ ■Sistema[5] ■Modelo[50] ■Ctx[9] ■Libre[36]      │
-├──────────────────────────────────────────────────┤
-│ ─── 🎮 AMD Radeon RX 6700 ────────  512/10240   │ ← segunda GPU
-│ ▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
-│ 512 / 10240 MB  (5%)                             │
-│ ■Sistema[5] ■Modelo[0] ■Ctx[0] ■Libre[95]       │
-├──────────────────────────────────────────────────┤
-│ ◢                                                │
-└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│ 🎮 NVIDIA GeForce RTX 3060           │ ← header (fondo c['bg'], color_header)
+│ ┌──────────────────────────────────┐  │
+│ │ ▓▓▓▓▓▓░░░░░░░░░░ 1024/12288 MB │  │ ← barra VRAM (ocupa todo el ancho)
+│ │             (8%)                 │  │
+│ └──────────────────────────────────┘  │
+│────────────────────── separador sutil │ ← #444444
+│ ■Sistema[5] ■Modelo[50] ■Ctx[9] ■Libre[36]         ◢ │ ← misma línea: leyenda izq + ◢ der
+└──────────────────────────────────────┘
 ```
+
+- **Barra + leyenda + ◢ se dibujan dentro del canvas** (no hay bottom_bar como Frame externo)
+- La leyenda y el ◢ comparten la misma línea de 18px al fondo
+- El ◢ se renderiza con el color configurable de texto (`c['fg']`)
 
 ## Menú hover
 
@@ -140,7 +141,7 @@ Botones en barra superior (colores fijos, no configurables):
 |-------|--------|-------|-------|
 | **Cerrar** | Cierra la app (guarda posición/tamaño) | `#333333` | `#CC3333` |
 | **Reset** | Restaura colores y tamaño por defecto | `#333333` | `#505050` |
-| **Color** | Abre selector de color nativo (fondo, texto, cada segmento) | `#333333` | `#505050` |
+| **Color** | Abre selector: fondo, texto, header, cada segmento | `#333333` | `#505050` |
 | **Compacto** | Toggle: una barra agregada vs. una por GPU | `#333333` | `#505050` |
 | **↻ GPUs** | Re-descubre dispositivos sin reiniciar | `#333333` | `#505050` |
 
@@ -158,24 +159,45 @@ Botones en barra superior (colores fijos, no configurables):
 | Menú hover | `#333333` | `#FFFFFF` |
 | Botón hover | `#505050` | `#FFFFFF` |
 | Botón Cerrar hover | `#CC3333` | `#FFFFFF` |
-| Barra inferior (resize) | `#333333` | `#FFFFFF` |
 
 ## Colores configurables por el usuario
 
-| Elemento | Default |
-|----------|---------|
-| Fondo ventana | `#1a1a2e` |
-| Texto (porcentaje) | `#ffffff` |
-| Segmento Sistema | `#FFFF00` |
-| Segmento Modelo | `#FF00FF` |
-| Segmento Contexto | `#00FFFF` |
-| Segmento Libre | `#00FF00` |
+| Elemento | Clave config | Default |
+|----------|-------------|---------|
+| Fondo ventana | `bg` | `#1a1a2e` |
+| Texto (porcentaje + ◢) | `fg` | `#ffffff` |
+| Header dispositivo | `color_header` | `#ffffff` |
+| Segmento Sistema | `color_sistema` | `#FFFF00` |
+| Segmento Modelo | `color_modelo` | `#FF00FF` |
+| Segmento Contexto | `color_contexto` | `#00FFFF` |
+| Segmento Libre | `color_libre` | `#00FF00` |
+
+## Config persistente
+
+Archivo: `%APPDATA%/VramMon/config.json`
+
+```json
+{
+  "bg": "#1a1a2e",
+  "fg": "#ffffff",
+  "color_header": "#ffffff",
+  "w": 460,
+  "h": 240,
+  "x": null,
+  "y": null,
+  "color_sistema": "#FFFF00",
+  "color_modelo": "#FF00FF",
+  "color_contexto": "#00FFFF",
+  "color_libre": "#00FF00",
+  "compact_mode": false
+}
+```
 
 ## Preview
 
 ![VramMon](sample_capture.png)
 
-*VramMon monitoreando RTX 3060 12GB — modo normal (izquierda) con barra por GPU*
+*VramMon monitoreando RTX 3060 12GB — modo normal con barra por GPU*
 
 ## Distribución
 
