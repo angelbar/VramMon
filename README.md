@@ -1,23 +1,27 @@
 # VramMon
 
-> Monitor de VRAM para GPUs NVIDIA — barra apilada en tiempo real, ventana flotante sin bordes.
+> Monitor multi-dispositivo de VRAM/memoria — barras apiladas en tiempo real, ventana flotante sin bordes.
 
-![VramMon screenshot](https://via.placeholder.com/400x90/1a1a2e/ffffff?text=VramMon+Preview)
+![VramMon screenshot](sample_capture.png)
 
-Un solo `.exe` nativo (~8 MB). Sin runtime, sin Python, sin empaquetador. **Cero falsos positivos de antivirus.**
+Un solo `.exe` nativo (~10 MB). Sin runtime, sin Python, sin empaquetador. Detecta GPUs NVIDIA, AMD, Intel y memoria unificada (Apple Silicon).
 
 ---
 
 ## ✨ Características
 
-- **Barra apilada** con 4 segmentos a color: Modelo, Contexto, Sistema, Libre
-- **Texto centrado** con uso total y porcentaje
-- **Ventana sin bordes**, arrastrable desde la barra
-- **Redimensionable** hasta ~30 px de alto
-- **Botones hover** (🎨 ↺ ✕) al pasar el mouse arriba
-- **Selector de color** nativo de Windows para fondo, texto y cada segmento
+- **Descubrimiento automático** de GPUs: NVIDIA (`nvidia-smi`), AMD (`rocm-smi`), Intel (WMI), Apple Silicon (`sysctl`)
+- **Multi-GPU**: una barra apilada por dispositivo, cada una con su header
+- **Modo compacto**: toggle que fusiona todas las GPUs en una barra agregada
+- **4 segmentos** por barra: Sistema (amarillo), Modelo (magenta), Contexto (cyan), Libre (verde)
+- **Leyenda + ◢** en la misma línea al fondo (leyenda izquierda, resize derecha)
+- **Header de dispositivo** con color independiente y configurable
+- **Ventana sin bordes** (frameless), arrastrable desde cualquier área
+- **Redimensionable** desde la esquina inferior derecha
+- **Menú hover** con Cerrar, Reset, Color, Compacto, ↻ GPUs
+- **Selector de color** nativo de Windows (fondo, texto, header, cada segmento)
 - **Actualización cada 5 segundos** vía `nvidia-smi`
-- **Persistencia** de posición, tamaño y colores en `%APPDATA%/VramMon/config.json`
+- **Persistencia** de posición, tamaño, colores y modo compacto en `%APPDATA%/VramMon/config.json`
 - **Sin terminal/consola** en segundo plano
 
 ---
@@ -26,12 +30,8 @@ Un solo `.exe` nativo (~8 MB). Sin runtime, sin Python, sin empaquetador. **Cero
 
 | Recurso | Enlace |
 |---------|--------|
-| Último release (.exe) | [Releases](https://github.com/Angelbar/vrammon/releases) |
-| Código fuente | [github.com/Angelbar/vrammon](https://github.com/Angelbar/vrammon) |
-
-### ⚠️ Aviso sobre antivirus
-
-VramMon es un binario nativo compilado con Go, **sin empaquetador**. No debería activar falsos positivos. Si tu antivirus lo marca, es un falso positivo — el código fuente completo está disponible para inspección.
+| Último release (.exe) | [Releases](https://github.com/angelbar/VramMon/releases) |
+| Código fuente | [github.com/angelbar/VramMon](https://github.com/angelbar/VramMon) |
 
 ---
 
@@ -39,62 +39,62 @@ VramMon es un binario nativo compilado con Go, **sin empaquetador**. No debería
 
 ### Requisitos
 
-- [Go](https://go.dev/dl/) 1.21 o superior
-- Windows 10/11 (usa `nvidia-smi`)
+- [Python](https://www.python.org/) 3.11+
+- [PyInstaller](https://pyinstaller.org/) (`pip install pyinstaller`)
 
 ### Pasos
 
 ```powershell
-git clone https://github.com/Angelbar/vrammon.git
-cd vrammon
-go build -ldflags="-H windowsgui" -o VramMon.exe
+git clone https://github.com/angelbar/VramMon.git
+cd VramMon
+pip install -r requirements.txt  # o pyinstaller
+py -3 -m PyInstaller VramMon.spec
 ```
 
-El binario `VramMon.exe` aparece en la carpeta actual.
-
-### Compilación cruzada (opcional)
-
-```powershell
-set GOOS=windows
-set GOARCH=amd64
-go build -ldflags="-H windowsgui" -o VramMon.exe
-```
+El binario `vrammon.exe` aparece en `dist/`.
 
 ---
 
 ## 🚀 Uso
 
 1. Descarga `VramMon.exe` o compílalo
-2. Ejecútalo — aparece una ventana flotante con la barra de VRAM
+2. Ejecútalo — aparece una ventana flotante con la(s) barra(s) de VRAM
 3. Pasa el mouse por la **zona superior** para ver los botones:
-   - **🎨** Abre los selectores de color (fondo → texto → modelo → contexto → sistema → libre)
-   - **↺** Restaura colores originales
-   - **✕** Cierra la aplicación
-4. **Arrastra** desde la barra para mover la ventana
-5. **Redimensiona** desde el triángulo ◢ en la esquina inferior derecha
+   - **Cerrar** — cierra la app (guarda posición y tamaño)
+   - **Reset** — restaura colores y tamaño por defecto
+   - **Color** — abre selectores de color (fondo → texto → header → sistema → modelo → contexto → libre)
+   - **Compacto** — toggle barra agregada / una por GPU
+   - **↻ GPUs** — redescubre dispositivos sin reiniciar
+4. **Arrastra** desde cualquier área para mover la ventana
+5. **Redimensiona** desde el ◢ en la esquina inferior derecha
 
 ---
 
 ## 🎨 Personalización de colores
 
-Usa el botón 🎨 para cambiar:
+Usa el botón **Color** del menú hover para cambiar (en orden):
 
 1. **Color de fondo** — fondo de la ventana
-2. **Color de texto** — texto dentro de la barra
-3. **Color — Modelo** — segmento magenta
-4. **Color — Contexto** — segmento cyan
-5. **Color — Sistema** — segmento amarillo
-6. **Color — Libre** — segmento verde
+2. **Color de texto** — texto del porcentaje y ◢
+3. **Color del header** — texto del nombre del dispositivo
+4. **Color — Sistema** — segmento amarillo
+5. **Color — Modelo** — segmento magenta
+6. **Color — Contexto** — segmento cyan
+7. **Color — Libre** — segmento verde
 
-Los colores persisten entre sesiones. Usa ↺ para restaurar los valores por defecto.
+Los colores persisten entre sesiones. Usa **Reset** para restaurar valores por defecto.
 
 ---
 
-## 🧠 Heurística de VRAM
+## 🧠 Heurística de VRAM (NVIDIA)
 
-- Overhead base del driver NVIDIA: **850 MB**
-- Contexto estimado: **15%** de la memoria del modelo
-- Los procesos "modelo" se detectan por nombre: `python`, `llama`, `ollama`, `studio`, `cuda`, `ai`, `tensor`, `vllm`, `text-generation`, `lmstudio`
+- Procesos IA detectados por nombre: `python`, `llama`, `ollama`, `studio`, `cuda`, `ai`, `tensor`, `vllm`, `lmstudio`, `text-generation`, `transformer`, `diffus`, `kobold`, `oobabooga`, `textgen`, `jan`, `koboldcpp`
+- Overhead dinámico: `min(850, usado * 0.12)`
+- **Modelo** = `model_vram * 0.85` (pesos)
+- **Contexto** = `model_vram * 0.15` (KV cache estimada)
+- **Sistema** = `usado_total - model_vram`
+- **Libre** = `memory.free` real de nvidia-smi
+- Suma: sistema + modelo + contexto + libre = total (100%)
 
 ---
 
@@ -102,11 +102,11 @@ Los colores persisten entre sesiones. Usa ↺ para restaurar los valores por def
 
 ```
 vrammon/
-├── vrammon.go       # Código fuente principal (Go/walk)
-├── vrammon.py       # Versión Python original (tkinter, referencia)
-├── go.mod           # Dependencias Go
+├── vrammon.py       # Código fuente principal (Python/tkinter)
+├── VramMon.spec     # Configuración PyInstaller
 ├── PRD.md           # Documento de diseño
 ├── README.md        # Este archivo
+├── sample_capture.png  # Captura de pantalla
 └── .gitignore       # Exclusiones
 ```
 
@@ -120,4 +120,4 @@ MIT — haz lo que quieras con el código.
 
 ## 🤝 Contribuir
 
-¿Encontraste un bug o quieres mejorar algo? Abre un [issue](https://github.com/Angelbar/vrammon/issues) o envía un PR.
+¿Encontraste un bug o quieres mejorar algo? Abre un [issue](https://github.com/angelbar/VramMon/issues) o envía un PR.
